@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       build_target:
-        description: 'Enter tag (e.g. 3.4.0) or branch (main)'
+        description: 'Enter tag (e.g. 3.5.6) or branch (main)'
         required: true
-        default: '3.4.0'
+        default: '3.5.6'
 
 jobs:
   release:
@@ -67,6 +67,23 @@ jobs:
         with:
           targets: aarch64-unknown-linux-musl
 
+      - name: Verify upstream MSRV and lockfile
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          test -f upstream_src/Cargo.lock
+          REQUIRED_RUST="$(sed -n 's/^rust-version = "\([^"]*\)"/\1/p' upstream_src/Cargo.toml | head -n1)"
+          CURRENT_RUST="$(rustc --version | awk '{print $2}')"
+          test -n "$REQUIRED_RUST"
+          test -n "$CURRENT_RUST"
+          echo "Upstream MSRV: $REQUIRED_RUST"
+          echo "Runner rustc: $CURRENT_RUST"
+          if [ "$(printf '%s\n%s\n' "$REQUIRED_RUST" "$CURRENT_RUST" | sort -V | head -n1)" != "$REQUIRED_RUST" ]; then
+            echo "ERROR: rustc $CURRENT_RUST is older than upstream MSRV $REQUIRED_RUST" >&2
+            exit 1
+          fi
+
       - name: Install build and packaging tools
         shell: bash
         run: |
@@ -98,7 +115,7 @@ jobs:
           export CARGO_PROFILE_RELEASE_PANIC=abort
           export CARGO_PROFILE_RELEASE_STRIP=true
 
-          cross build --release --target "${AARCH64_TARGET}"
+          cross build --release --locked --target "${AARCH64_TARGET}"
 
       - name: Compress aarch64 binary with UPX
         shell: bash
