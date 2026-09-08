@@ -656,12 +656,18 @@ start_service() {
         return 0
     fi
 
-    # Smart Version detection (waterfall: --version → -V → strings → grep)
+    # Version detection: passive marker first. telemt_wrt appends the marker to
+    # the very end of packaged binaries, so the normal path reads only 512 bytes
+    # and does not exec the Rust binary just to discover its version.
     local ver=""
-    ver=$("$PROG" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
-    [ -z "$ver" ] && ver=$("$PROG" -V 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
-    [ -z "$ver" ] && command -v strings >/dev/null 2>&1 && ver=$(strings "$PROG" 2>/dev/null | grep -iE '^MTProxy v' | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+    ver=$(tail -c 512 "$PROG" 2>/dev/null | grep -a -oE 'MTProxy v[0-9]+\.[0-9]+\.[0-9]+' | tail -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+
+    # Legacy packaged binaries may contain the same marker away from the tail.
     [ -z "$ver" ] && ver=$(grep -a -m 1 -ioE 'MTProxy v[0-9]+\.[0-9]+\.[0-9]+' "$PROG" 2>/dev/null | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+
+    # Compatibility fallback for manually replaced/upstream binaries without our marker.
+    [ -z "$ver" ] && ver=$("$PROG" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+    [ -z "$ver" ] && ver=$("$PROG" -V 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
 
     if [ -n "$ver" ]; then
         echo "$ver" > "$VER_FILE"
