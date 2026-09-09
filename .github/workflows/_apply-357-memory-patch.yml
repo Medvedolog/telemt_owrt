@@ -31,14 +31,12 @@ jobs:
                   raise SystemExit(f"{path}: expected exactly one anchor, found {n}: {old!r}")
               p.write_text(s.replace(old, new, 1))
 
-          # Persistent UCI: MiB is operator-facing; 0 preserves upstream Auto.
           replace_once(
               "files/telemt.config",
               "\toption log_level 'normal'\n",
               "\toption log_level 'normal'\n\t# Telemt 3.5.7 Direct relay copy-buffer hard ceiling. 0 = Auto from host/cgroup memory.\n\toption direct_relay_buffer_budget_max_mib '0'\n",
           )
 
-          # init.d: validate MiB and translate to upstream byte key.
           replace_once(
               "files/telemt.init",
               "    local client_mss mask_dynamic\n",
@@ -55,7 +53,6 @@ jobs:
               "tg_connect = $tm_connect\ndirect_relay_buffer_budget_max_bytes = $direct_relay_buffer_budget_max_bytes\nTOML\n",
           )
 
-          # CI moves to upstream 3.5.7 but branch name intentionally stays telemt-3.5.6-web.
           p = Path(".github/workflows/telemt-3.5.6-web-ci.yml")
           s = p.read_text()
           replacements = {
@@ -63,7 +60,6 @@ jobs:
               "VERSION: '3.5.6'": "VERSION: '3.5.7'",
               "Checkout upstream Telemt 3.5.6": "Checkout upstream Telemt 3.5.7",
               "ref: 3.5.6\n          path: upstream_src": "ref: 3.5.7\n          path: upstream_src",
-              "version = \\\"3\\.5\\.6\\\"": "version = \\\"3\\.5\\.7\\\"",
               "Build aarch64 Telemt 3.5.6 locked": "Build aarch64 Telemt 3.5.7 locked",
               "telemt-3.5.6-r1.apk": "telemt-3.5.7-r1.apk",
               "version: 3.5.6-r1": "version: 3.5.7-r1",
@@ -73,6 +69,9 @@ jobs:
               if old not in s:
                   raise SystemExit(f"CI anchor missing: {old!r}")
               s = s.replace(old, new)
+          if '3\\.5\\.6' not in s:
+              raise SystemExit('CI escaped Cargo version anchor missing')
+          s = s.replace('3\\.5\\.6', '3\\.5\\.7')
           marker = "          sh -n files/telemt-web-haproxy.hotplug\n"
           if marker not in s:
               raise SystemExit("CI shell-check marker missing")
