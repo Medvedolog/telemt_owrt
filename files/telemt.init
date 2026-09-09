@@ -124,9 +124,10 @@ generate_toml() {
     local TMP_IPS=$(mktemp /tmp/telemt_ips.XXXXXX)
     local TMP_QUOTA=$(mktemp /tmp/telemt_quota.XXXXXX)
     local TMP_EXP=$(mktemp /tmp/telemt_exp.XXXXXX)
+    local TMP_WEB=$(mktemp /tmp/telemt_web.XXXXXX)
     local TMP_CONF=$(mktemp "$target_dir/${target_base}.tmp.XXXXXX")
 
-    cleanup_tmp() { rm -f "$TMP_LINKS" "$TMP_USERS" "$TMP_CONNS" "$TMP_IPS" "$TMP_QUOTA" "$TMP_EXP" "$TMP_CONF"; }
+    cleanup_tmp() { rm -f "$TMP_LINKS" "$TMP_USERS" "$TMP_CONNS" "$TMP_IPS" "$TMP_QUOTA" "$TMP_EXP" "$TMP_WEB" "$TMP_CONF" ${web_vhost_tmp:-}; }
 
     # --- Variable declarations ---
     local mode port api_port metrics_port ext_rt m_alo m_alan metrics_whitelist domain log_level
@@ -143,9 +144,11 @@ generate_toml() {
     local metrics_listen_addr api_listen_addr
     # 3.4.18 additions
     local client_mss mask_dynamic
-    # 3.5.6 WEB core (vhosts/profiles are added by the next LAB patch)
-    local web_enabled web_listener_enabled web_ip web_port web_client_ip_source web_carrier
-    local web_trusted_toml
+    # 3.5.6 WEB core + vhosts/profiles
+    local web_enabled web_runtime_enabled web_listener_enabled web_ip web_port web_client_ip_source web_carrier
+    local web_trusted_toml web_vhost_count web_active_vhost_count web_generation_error
+    local web_seen_vhosts web_seen_hosts web_current_vhost web_vhost_tmp
+    local web_profiles_configured web_profiles_active
 
     config_get mode general mode "tls"
     config_get port general port "8443"
@@ -180,6 +183,7 @@ generate_toml() {
     config_get web_ip web_listener ip "127.0.0.1"
     config_get web_port web_listener port "18080"
     config_get web_client_ip_source web_listener client_ip_source "x_forwarded_for"
+    web_runtime_enabled=0
 
     if [ "$web_enabled" -eq 1 ]; then
         if [ "$web_listener_enabled" -ne 1 ]; then
@@ -222,6 +226,196 @@ generate_toml() {
         if [ -z "$web_trusted_toml" ]; then
             web_trusted_toml='"127.0.0.1/32"'
             logger -t telemt "Init: WEB trusted proxy list empty; falling back to 127.0.0.1/32"
+        fi
+
+        # Build WEB vhosts/profiles into a temporary fragment first. This lets a
+        # disabled shared user remove its profile without ever leaving an invalid
+        # enabled vhost in the generated TOML.
+        web_vhost_count=0
+        web_active_vhost_count=0
+        web_generation_error=0
+        web_seen_vhosts="|"
+        web_seen_hosts="|"
+
+        handle_web_profile() {
+            local s="$1"
+            local p_en p_vhost p_user p_mode p_type p_user_en p_secret
+            local p_max_sessions p_max_streams p_max_streams_per_session
+
+            config_get_bool p_en "$s" enabled 1
+            [ "$p_en" -eq 1 ] || return 0
+            config_get p_vhost "$s" vhost ""
+            [ "$p_vhost" = "$web_current_vhost" ] || return 0
+
+            web_profiles_configured=$((web_profiles_configured + 1))
+            config_get p_user "$s" user ""
+            config_get p_mode "$s" secret_mode "dd"
+
+            case "$p_user" in
+                ""|*[!A-Za-z0-9_]*)
+                    logger -t telemt "Init: WEB profile '$s' has invalid shared user '$p_user'"
+                    web_generation_error=1; return 0
+                    ;;
+            esac
+            config_get p_type "$p_user" TYPE ""
+            if [ "$p_type" != "user" ]; then
+                logger -t telemt "Init: WEB profile '$s' references missing user '$p_user'"
+                web_generation_error=1; return 0
+            fi
+            config_get_bool p_user_en "$p_user" enabled 1
+            if [ "$p_user_en" -ne 1 ]; then
+                logger -t telemt "Init: WEB profile '$s' omitted because shared user '$p_user' is disabled"
+                return 0
+            fi
+            config_get p_secret "$p_user" secret ""
+            if [ -z "$p_secret" ]; then
+                logger -t telemt "Init: WEB profile '$s' references user '$p_user' without a secret"
+                web_generation_error=1; return 0
+            fi
+            case "$p_mode" in
+                plain|dd) ;;
+                *)
+                    logger -t telemt "Init: WEB profile '$s' has invalid secret_mode '$p_mode' (plain/dd only)"
+                    web_generation_error=1; return 0
+                    ;;
+            esac
+
+            config_get p_max_sessions "$s" max_sessions ""
+            config_get p_max_streams "$s" max_streams ""
+            config_get p_max_streams_per_session "$s" max_streams_per_session ""
+            for _web_limit in "$p_max_sessions" "$p_max_streams" "$p_max_streams_per_session"; do
+                [ -z "$_web_limit" ] && continue
+                if ! is_uint "$_web_limit" || [ "$_web_limit" -lt 1 ]; then
+                    logger -t telemt "Init: WEB profile '$s' contains an invalid positive limit"
+                    web_generation_error=1; return 0
+                fi
+            done
+
+            cat <<TOML >> "$web_vhost_tmp"
+
+[[web.vhosts.profiles]]
+user = "$p_user"
+secret_mode = "$p_mode"
+TOML
+            [ -n "$p_max_sessions" ] && echo "max_sessions = $p_max_sessions" >> "$web_vhost_tmp"
+            [ -n "$p_max_streams" ] && echo "max_streams = $p_max_streams" >> "$web_vhost_tmp"
+            [ -n "$p_max_streams_per_session" ] && echo "max_streams_per_session = $p_max_streams_per_session" >> "$web_vhost_tmp"
+            web_profiles_active=$((web_profiles_active + 1))
+        }
+
+        handle_web_vhost() {
+            local s="$1"
+            local vh_en vh_name vh_host vh_public_addr vh_decoy_mode vh_decoy_upstream
+
+            config_get_bool vh_en "$s" enabled 1
+            [ "$vh_en" -eq 1 ] || return 0
+            config_get vh_name "$s" name "$s"
+            config_get vh_host "$s" host ""
+            config_get vh_public_addr "$s" public_addr ""
+            config_get vh_decoy_mode "$s" decoy_mode "http_upstream"
+            config_get vh_decoy_upstream "$s" decoy_upstream ""
+
+            case "$vh_name" in
+                ""|*[!A-Za-z0-9_-]*)
+                    logger -t telemt "Init: WEB vhost '$s' has invalid name '$vh_name'"
+                    web_generation_error=1; return 0
+                    ;;
+            esac
+            case "$web_seen_vhosts" in
+                *"|$vh_name|"*)
+                    logger -t telemt "Init: duplicate WEB vhost name '$vh_name'"
+                    web_generation_error=1; return 0
+                    ;;
+            esac
+            if ! echo "$vh_host" | grep -qE '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' || ! echo "$vh_host" | grep -q '\.'; then
+                logger -t telemt "Init: WEB vhost '$vh_name' has invalid FQDN '$vh_host'"
+                web_generation_error=1; return 0
+            fi
+            vh_host=$(echo "$vh_host" | tr 'A-Z' 'a-z')
+            case "$web_seen_hosts" in
+                *"|$vh_host|"*)
+                    logger -t telemt "Init: duplicate WEB vhost host '$vh_host'"
+                    web_generation_error=1; return 0
+                    ;;
+            esac
+            if ! echo "$vh_public_addr" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}:443$|^\[[0-9A-Fa-f:]+\]:443$'; then
+                logger -t telemt "Init: WEB vhost '$vh_name' public_addr must be a concrete IP on :443"
+                web_generation_error=1; return 0
+            fi
+            if [ "$vh_decoy_mode" != "http_upstream" ]; then
+                logger -t telemt "Init: WEB decoy mode '$vh_decoy_mode' not enabled in this LAB"
+                web_generation_error=1; return 0
+            fi
+            if ! echo "$vh_decoy_upstream" | grep -qE '^http://(([0-9]{1,3}\.){3}[0-9]{1,3}|\[[0-9A-Fa-f:]+\])(:[0-9]{1,5})?$'; then
+                logger -t telemt "Init: WEB vhost '$vh_name' decoy must be an http:// IP-literal origin without path/query"
+                web_generation_error=1; return 0
+            fi
+
+            web_vhost_count=$((web_vhost_count + 1))
+            web_seen_vhosts="${web_seen_vhosts}${vh_name}|"
+            web_seen_hosts="${web_seen_hosts}${vh_host}|"
+            web_current_vhost="$vh_name"
+            web_profiles_configured=0
+            web_profiles_active=0
+            web_vhost_tmp=$(mktemp /tmp/telemt_web_vhost.XXXXXX)
+            if [ -z "$web_vhost_tmp" ]; then
+                logger -t telemt "Init: cannot allocate WEB vhost temporary file"
+                web_generation_error=1; return 0
+            fi
+
+            cat <<TOML > "$web_vhost_tmp"
+
+[[web.vhosts]]
+host = "$(sanitize_toml_value "$vh_host")"
+public_addr = "$(sanitize_toml_value "$vh_public_addr")"
+
+[web.vhosts.decoy]
+mode = "http_upstream"
+upstream = "$(sanitize_toml_value "$vh_decoy_upstream")"
+TOML
+            config_foreach handle_web_profile web_profile
+
+            if [ "$web_profiles_configured" -eq 0 ]; then
+                logger -t telemt "Init: WEB vhost '$vh_name' has no enabled profiles"
+                web_generation_error=1
+            elif [ "$web_profiles_active" -eq 0 ]; then
+                logger -t telemt "Init: WEB vhost '$vh_name' has no active profiles; omitting it until a shared user is enabled"
+            elif [ "$web_generation_error" -eq 0 ]; then
+                cat "$web_vhost_tmp" >> "$TMP_WEB"
+                web_active_vhost_count=$((web_active_vhost_count + 1))
+            fi
+            rm -f "$web_vhost_tmp"
+            web_vhost_tmp=""
+        }
+
+        validate_web_profile_vhost() {
+            local s="$1"
+            local p_en p_vhost
+            config_get_bool p_en "$s" enabled 1
+            [ "$p_en" -eq 1 ] || return 0
+            config_get p_vhost "$s" vhost ""
+            case "$web_seen_vhosts" in
+                *"|$p_vhost|"*) ;;
+                *)
+                    logger -t telemt "Init: WEB profile '$s' references missing/disabled vhost '$p_vhost'"
+                    web_generation_error=1
+                    ;;
+            esac
+        }
+
+        config_foreach handle_web_vhost web_vhost
+        config_foreach validate_web_profile_vhost web_profile
+        if [ "$web_vhost_count" -eq 0 ]; then
+            logger -t telemt "Init: WEB is enabled but no enabled web_vhost exists"
+            web_generation_error=1
+        fi
+        if [ "$web_generation_error" -ne 0 ]; then
+            cleanup_tmp; return 1
+        fi
+        if [ "$web_active_vhost_count" -gt 0 ]; then
+            web_runtime_enabled=1
+        else
+            logger -t telemt "Init: WEB configured but all shared-user profiles are disabled; runtime WEB remains off"
         fi
     fi
 
@@ -506,7 +700,7 @@ TOML
     # WEB is a separate application transport behind a trusted TLS terminator.
     # Keep all WEB structure before the DYNAMIC marker so current reload logic
     # treats WEB changes as restart-sensitive CORE changes.
-    if [ "$web_enabled" -eq 1 ]; then
+    if [ "$web_runtime_enabled" -eq 1 ]; then
         cat <<TOML >> "$TMP_CONF"
 
 [[server.listeners]]
@@ -522,6 +716,7 @@ web_trusted_proxy_cidrs = [$web_trusted_toml]
 enabled = true
 carrier = "$web_carrier"
 TOML
+        cat "$TMP_WEB" >> "$TMP_CONF"
     fi
 
     cat <<TOML >> "$TMP_CONF"
