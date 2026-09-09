@@ -160,7 +160,7 @@ config web 'web'
 ```uci
 config web_listener 'web_listener'
         option ip '127.0.0.1'
-        option port '18080'
+        option port '27453'
         option client_ip_source 'x_forwarded_for'
         list trusted_proxy_cidr '127.0.0.1/32'
 ```
@@ -174,7 +174,7 @@ config web_vhost
         option host 'proxy.example.com'
         option public_addr '203.0.113.10:443'
         option decoy_mode 'http_upstream'
-        option decoy_upstream 'http://127.0.0.1:18081'
+        option decoy_upstream 'http://127.0.0.1:27454'
 ```
 
 #### Profile
@@ -197,7 +197,7 @@ config web_profile
 ```toml
 [[server.listeners]]
 ip = "127.0.0.1"
-port = 18080
+port = 27453
 transport = "web"
 proxy_protocol = false
 reuse_allow = false
@@ -250,7 +250,7 @@ carrier = "https"
 Minimum deployment:
 
 ```text
-Telemt WEB: 127.0.0.1:18080
+Telemt WEB: 127.0.0.1:27453
 carrier: https
 TLS frontend: external
 vhosts: 1+
@@ -285,7 +285,7 @@ Telegram
    ↓ HTTPS/WSS :443
 HAProxy
    ↓ HTTP/1.1 + X-Forwarded-For
-Telemt WEB 127.0.0.1:18080
+Telemt WEB 127.0.0.1:27453
 ```
 
 - [ ] Do not use PROXY protocol for WEB transport.
@@ -503,7 +503,7 @@ Test:
 - [ ] expiration/quota accounting behaves correctly with WEB.
 - [ ] API/metrics still work.
 - [ ] firewall remains correct.
-- [ ] no WAN exposure of WEB listener `18080`.
+- [ ] no WAN exposure of WEB listener `27453`.
 - [ ] no automatic WAN exposure of API `9091`.
 
 ---
@@ -534,7 +534,7 @@ Test:
 - [ ] no second Telemt daemon for validation.
 - [ ] no semantic hot-reload classifier.
 - [ ] no PATCH API as persistent source of truth.
-- [ ] no WAN exposure of `18080`.
+- [ ] no WAN exposure of `27453`.
 - [ ] no mandatory NGINX dependency.
 - [ ] no mandatory HAProxy dependency.
 - [ ] no automatic installation of both frontends.
