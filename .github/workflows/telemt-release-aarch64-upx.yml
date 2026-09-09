@@ -232,6 +232,11 @@ jobs:
           echo "================================================================="
           echo " Removing Headless Telemt package"
           echo "================================================================="
+          if [ -x /usr/libexec/telemt-web-frontend ] && \
+             [ -f /etc/haproxy.cfg.telemt-backup ] && \
+             grep -qF '# TELEMT-MANAGED-HAPROXY v1' /etc/haproxy.cfg 2>/dev/null; then
+              /usr/libexec/telemt-web-frontend restore 2>/dev/null || true
+          fi
           /etc/init.d/telemt disable 2>/dev/null || true
           /etc/init.d/telemt stop 2>/dev/null || true
           exit 0
@@ -246,7 +251,9 @@ jobs:
           echo "================================================================="
           rm -f /var/etc/telemt.toml
           rm -f /var/etc/telemt.version
-          rm -f /var/etc/telemt-haproxy.pem
+          if ! grep -qF '# TELEMT-MANAGED-HAPROXY v1' /etc/haproxy.cfg 2>/dev/null; then
+              rm -f /var/etc/telemt-haproxy.pem
+          fi
           rm -f /tmp/etc/telemt.toml
           rm -f /tmp/telemt_stats.txt
           rm -rf /tmp/telemt-web-haproxy.lock
