@@ -28,9 +28,12 @@ jobs:
           s = p.read_text()
           old = '    if [ "$web_carrier_policy" = "auto" ]; then\n'
           new = '    if [ "$web_enabled" -eq 1 ] && [ "$web_carrier_policy" = "auto" ]; then\n'
-          if s.count(old) != 1:
-              raise SystemExit(f'expected exactly one target, found {s.count(old)}')
-          p.write_text(s.replace(old, new, 1))
+          if s.count(old) != 2:
+              raise SystemExit(f'expected two auto guards before patch, found {s.count(old)}')
+          s = s.replace(old, new, 1)
+          if s.count(new) != 1 or s.count(old) != 1:
+              raise SystemExit('N5 patch did not isolate exactly the validation guard')
+          p.write_text(s)
           PY
           git diff --check
           test "$(git diff --numstat -- files/telemt.init | awk '{print $1+$2}')" -eq 2
