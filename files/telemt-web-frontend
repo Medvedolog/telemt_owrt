@@ -33,6 +33,7 @@ load_config() {
 
     web_hosts=''
     web_host_count=0
+    web_host_error=0
     trusted_loopback=0
 
     collect_host() {
@@ -40,8 +41,11 @@ load_config() {
         config_get_bool en "$s" enabled 1
         [ "$en" -eq 1 ] || return 0
         config_get host "$s" host ''
-        echo "$host" | grep -qE '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' || return 0
-        echo "$host" | grep -q '\.' || return 0
+        if ! echo "$host" | grep -qE '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' || ! echo "$host" | grep -q '\.'; then
+            printf "ERROR: enabled WEB vhost '%s' has invalid FQDN '%s'\n" "$s" "$host" >&2
+            web_host_error=1
+            return 0
+        fi
         host=$(echo "$host" | tr 'A-Z' 'a-z')
         web_hosts="${web_hosts} ${host} ${host}:443"
         web_host_count=$((web_host_count + 1))
@@ -69,14 +73,17 @@ validate_frontend_config() {
     is_uint "$web_port" && [ "$web_port" -ge 1 ] && [ "$web_port" -le 65535 ] || \
         die "invalid WEB backend port '$web_port'"
     [ "$trusted_loopback" -eq 1 ] || die 'web_listener must trust 127.0.0.1/32 for managed HAProxy'
+    [ "$web_host_error" -eq 0 ] || die 'one or more enabled WEB vhosts are invalid'
     [ "$web_host_count" -gt 0 ] || die 'at least one enabled WEB vhost with a valid FQDN is required'
 
     echo "$haproxy_bind" | grep -qE '^:443$|^0\.0\.0\.0:443$|^([0-9]{1,3}\.){3}[0-9]{1,3}:443$|^\[[0-9A-Fa-f:]+\]:443$' || \
         die "haproxy_bind must be a concrete address on TCP/443 or ':443'"
 
     [ -n "$haproxy_cert" ] || die 'haproxy_cert is empty'
+    echo "$haproxy_cert" | grep -qE '^/[A-Za-z0-9._/@+-]+$' || die 'haproxy_cert contains unsupported path characters'
     [ -f "$haproxy_cert" ] || die "certificate file not found: $haproxy_cert"
     if [ -n "$haproxy_key" ]; then
+        echo "$haproxy_key" | grep -qE '^/[A-Za-z0-9._/@+-]+$' || die 'haproxy_key contains unsupported path characters'
         [ -f "$haproxy_key" ] || die "private key file not found: $haproxy_key"
     fi
 }
@@ -186,19 +193,17 @@ acquire_lock() {
     if ! mkdir "$LOCKDIR" 2>/dev/null; then
         die 'another managed HAProxy operation is in progress'
     fi
-    trap 'rm -rf "$LOCKDIR"' EXIT INT TERM
+    trap 'rm -rf "$LOCKDIR"' 0 1 2 15
 }
 
 cmd_render() {
     load_config
     require_haproxy_ssl
     validate_frontend_config
-    printf '%s\n' "$MARKER"
-    printf '# Preview only; certificate path shown as configured.\n\n'
     local tmp
     tmp=$(mktemp /tmp/telemt-haproxy-render.XXXXXX) || die 'mktemp failed'
     render_cfg "$tmp" "$haproxy_cert" || { rm -f "$tmp"; die 'render failed'; }
-    sed '1,2d' "$tmp"
+    cat "$tmp"
     rm -f "$tmp"
 }
 
@@ -229,45 +234,57 @@ cmd_apply() {
     acquire_lock
 
     mkdir -p /var/etc || die 'cannot create /var/etc'
-    local tmp_pem tmp_cfg rollback had_live=0
+    local tmp_pem tmp_cfg rollback rollback_pem had_live=0 had_pem=0
     tmp_pem="${RUNTIME_PEM}.tmp.$$"
     tmp_cfg=$(mktemp /etc/.haproxy.cfg.telemt.XXXXXX) || die 'mktemp failed'
     rollback=$(mktemp /tmp/haproxy.cfg.rollback.XXXXXX) || { rm -f "$tmp_cfg"; die 'mktemp failed'; }
+    rollback_pem=$(mktemp /tmp/telemt-haproxy.pem.rollback.XXXXXX) || { rm -f "$tmp_cfg" "$rollback"; die 'mktemp failed'; }
 
-    prepare_pem "$tmp_pem" || { rm -f "$tmp_pem" "$tmp_cfg" "$rollback"; die 'cannot build certificate bundle'; }
-    render_cfg "$tmp_cfg" "$tmp_pem" || { rm -f "$tmp_pem" "$tmp_cfg" "$rollback"; die 'render failed'; }
-    check_cfg "$tmp_cfg" || { rm -f "$tmp_pem" "$tmp_cfg" "$rollback"; die 'HAProxy rejected generated configuration'; }
+    prepare_pem "$tmp_pem" || { rm -f "$tmp_pem" "$tmp_cfg" "$rollback" "$rollback_pem"; die 'cannot build certificate bundle'; }
+    render_cfg "$tmp_cfg" "$tmp_pem" || { rm -f "$tmp_pem" "$tmp_cfg" "$rollback" "$rollback_pem"; die 'render failed'; }
+    check_cfg "$tmp_cfg" || { rm -f "$tmp_pem" "$tmp_cfg" "$rollback" "$rollback_pem"; die 'HAProxy rejected generated configuration'; }
 
     if [ -f "$HAPROXY_CFG" ]; then
         had_live=1
-        cp -p "$HAPROXY_CFG" "$rollback" || { rm -f "$tmp_pem" "$tmp_cfg" "$rollback"; die 'cannot create rollback copy'; }
+        cp -p "$HAPROXY_CFG" "$rollback" || { rm -f "$tmp_pem" "$tmp_cfg" "$rollback" "$rollback_pem"; die 'cannot create rollback copy'; }
         if ! grep -qF "$MARKER" "$HAPROXY_CFG" 2>/dev/null && [ ! -e "$HAPROXY_BACKUP" ]; then
-            cp -p "$HAPROXY_CFG" "$HAPROXY_BACKUP" || { rm -f "$tmp_pem" "$tmp_cfg" "$rollback"; die 'cannot back up existing /etc/haproxy.cfg'; }
+            cp -p "$HAPROXY_CFG" "$HAPROXY_BACKUP" || { rm -f "$tmp_pem" "$tmp_cfg" "$rollback" "$rollback_pem"; die 'cannot back up existing /etc/haproxy.cfg'; }
             chmod 600 "$HAPROXY_BACKUP" 2>/dev/null || true
             log "Saved original HAProxy config to $HAPROXY_BACKUP"
         fi
     fi
+    if [ -f "$RUNTIME_PEM" ]; then
+        had_pem=1
+        cp -p "$RUNTIME_PEM" "$rollback_pem" || { rm -f "$tmp_pem" "$tmp_cfg" "$rollback" "$rollback_pem"; die 'cannot back up runtime PEM'; }
+    fi
 
-    mv -f "$tmp_pem" "$RUNTIME_PEM" || { rm -f "$tmp_cfg" "$rollback"; die 'cannot install runtime PEM'; }
-    render_cfg "$tmp_cfg" "$RUNTIME_PEM" || { rm -f "$tmp_cfg" "$rollback"; die 'render failed'; }
-    check_cfg "$tmp_cfg" || { rm -f "$tmp_cfg" "$rollback"; die 'HAProxy rejected final managed configuration'; }
-    mv -f "$tmp_cfg" "$HAPROXY_CFG" || { rm -f "$rollback"; die 'cannot install managed HAProxy config'; }
+    mv -f "$tmp_pem" "$RUNTIME_PEM" || { rm -f "$tmp_cfg" "$rollback" "$rollback_pem"; die 'cannot install runtime PEM'; }
+    render_cfg "$tmp_cfg" "$RUNTIME_PEM" || { rm -f "$tmp_cfg" "$rollback" "$rollback_pem"; die 'render failed'; }
+    check_cfg "$tmp_cfg" || { rm -f "$tmp_cfg" "$rollback" "$rollback_pem"; die 'HAProxy rejected final managed configuration'; }
+    mv -f "$tmp_cfg" "$HAPROXY_CFG" || { rm -f "$rollback" "$rollback_pem"; die 'cannot install managed HAProxy config'; }
     chmod 600 "$HAPROXY_CFG"
 
     if ! install_firewall_rule || ! reload_haproxy; then
-        log 'Managed HAProxy activation failed; rolling back /etc/haproxy.cfg' >&2
+        log 'Managed HAProxy activation failed; rolling back' >&2
         remove_firewall_rule >/dev/null 2>&1 || true
         if [ "$had_live" -eq 1 ] && [ -s "$rollback" ]; then
             cp -p "$rollback" "$HAPROXY_CFG"
-            if pidof haproxy >/dev/null 2>&1; then
-                /etc/init.d/haproxy force_reload >/dev/null 2>&1 || true
-            fi
+        else
+            rm -f "$HAPROXY_CFG"
         fi
-        rm -f "$rollback"
-        die 'HAProxy apply failed and previous config was restored where possible'
+        if [ "$had_pem" -eq 1 ] && [ -s "$rollback_pem" ]; then
+            cp -p "$rollback_pem" "$RUNTIME_PEM"
+        else
+            rm -f "$RUNTIME_PEM"
+        fi
+        if [ "$had_live" -eq 1 ] && pidof haproxy >/dev/null 2>&1; then
+            /etc/init.d/haproxy force_reload >/dev/null 2>&1 || true
+        fi
+        rm -f "$rollback" "$rollback_pem"
+        die 'HAProxy apply failed and previous state was restored where possible'
     fi
 
-    rm -f "$rollback"
+    rm -f "$rollback" "$rollback_pem"
     log "OK: managed HAProxy active on ${haproxy_bind} -> ${web_ip}:${web_port}"
     [ "$haproxy_auto_fw" -eq 1 ] && log 'OK: managed WAN TCP/443 firewall rule is active'
 }
