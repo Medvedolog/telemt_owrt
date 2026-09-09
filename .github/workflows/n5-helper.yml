@@ -19,18 +19,24 @@ jobs:
         with:
           ref: telemt-3.5.6-web
           fetch-depth: 0
-      - name: Add exact N5 CI assertion
+      - name: Add exact N5 CI assertions
         run: |
           set -euxo pipefail
           python3 - <<'PY'
           from pathlib import Path
           p = Path('.github/workflows/telemt-3.5.6-web-ci.yml')
           s = p.read_text()
-          old = "          grep -q 'duplicate WEB auto carrier candidate' files/telemt.init\n          grep -q 'if \\\[ \"$web_carrier_policy\" = \"auto\" \\\]; then' files/telemt.init\n"
-          new = "          grep -q 'duplicate WEB auto carrier candidate' files/telemt.init\n          # N5: malformed auto settings are strict only when WEB is enabled.\n          grep -q 'if \\\[ \"$web_enabled\" -eq 1 \\\] && \\\[ \"$web_carrier_policy\" = \"auto\" \\\]; then' files/telemt.init\n          # The second auto guard is the TOML emission guard and must remain policy-only.\n          test \"$(grep -c 'if \\\[ \"$web_carrier_policy\" = \"auto\" \\\]; then' files/telemt.init)\" -eq 1\n"
-          if s.count(old) != 1:
-              raise SystemExit(f'expected one CI insertion point, found {s.count(old)}')
-          p.write_text(s.replace(old, new, 1))
+          anchor = "          grep -q 'duplicate WEB auto carrier candidate' files/telemt.init\n"
+          extra = (
+              "          # N5: strict auto validation is active only while WEB itself is enabled.\n"
+              "          grep -Fq 'if [ \"$web_enabled\" -eq 1 ] && [ \"$web_carrier_policy\" = \"auto\" ]; then' files/telemt.init\n"
+              "          test \"$(grep -Fc 'if [ \"$web_carrier_policy\" = \"auto\" ]; then' files/telemt.init)\" -eq 1\n"
+          )
+          if s.count(anchor) != 1:
+              raise SystemExit(f'expected one insertion anchor, found {s.count(anchor)}')
+          if 'strict auto validation is active only while WEB itself is enabled' in s:
+              raise SystemExit('N5 assertions already present')
+          p.write_text(s.replace(anchor, anchor + extra, 1))
           PY
           git diff --check
           git diff -- .github/workflows/telemt-3.5.6-web-ci.yml
