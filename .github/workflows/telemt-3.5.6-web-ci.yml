@@ -1,0 +1,231 @@
+name: Validate Telemt 3.5.6 WEB branch
+
+on:
+  push:
+    branches:
+      - telemt-3.5.6-web
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Build and package validation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    env:
+      VERSION: '3.5.6'
+      UPSTREAM_REPO: telemt/telemt
+      AARCH64_TARGET: aarch64-unknown-linux-musl
+      AARCH64_OUT_BIN: telemt-aarch64-musl
+      X86_64_ASSET_NAME: telemt-x86_64-linux-musl.tar.gz
+      X86_64_ASSET_SHA256_NAME: telemt-x86_64-linux-musl.tar.gz.sha256
+      X86_64_OUT_BIN: telemt-x86_64-musl
+
+    steps:
+      - name: Checkout working branch
+        uses: actions/checkout@v4
+
+      - name: Validate OpenWrt shell and packaging references
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          sh -n files/telemt.init
+          sh -n files/telemt-web-check
+          sh -n files/telemt-web-frontend
+          sh -n files/telemt-web-haproxy.hotplug
+
+          grep -q "option port '27453'" files/telemt.config
+          grep -q 'config_get web_port web_listener port "27453"' files/telemt.init
+          grep -q "config_get web_port web_listener port '27453'" files/telemt-web-check
+          grep -q "config_get web_port web_listener port '27453'" files/telemt-web-frontend
+
+          if grep -R -n -E "option port '18080'|port = 18080|127\.0\.0\.1:18080|127\.0\.0\.1:18081" \
+            ROADMAP_3.5_WEB.md docs/WEB_EXTERNAL_FRONTEND.ru.md docs/WEB_HAPROXY_MANAGED.ru.md \
+            files/telemt.config files/telemt.init files/telemt-web-check files/telemt-web-frontend; then
+            echo 'ERROR: stale 1808x WEB endpoint found' >&2
+            exit 1
+          fi
+
+          RELEASE_WF=.github/workflows/telemt-release-aarch64-upx.yml
+          test "$(grep -c 'dst: /usr/libexec/telemt-web-check' "$RELEASE_WF")" -eq 4
+          test "$(grep -c 'dst: /usr/libexec/telemt-web-frontend' "$RELEASE_WF")" -eq 4
+          test "$(grep -c 'dst: /etc/hotplug.d/acme/95-telemt-web-haproxy' "$RELEASE_WF")" -eq 4
+          test "$(grep -c 'dst: /etc/config/telemt' "$RELEASE_WF")" -eq 4
+
+      - name: Checkout upstream Telemt 3.5.6
+        uses: actions/checkout@v4
+        with:
+          repository: telemt/telemt
+          ref: 3.5.6
+          path: upstream_src
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Verify upstream version, MSRV, and lockfile
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          test -f upstream_src/Cargo.lock
+          grep -q '^version = "3\.5\.6"' upstream_src/Cargo.toml
+          REQUIRED_RUST="$(sed -n 's/^rust-version = "\([^"]*\)"/\1/p' upstream_src/Cargo.toml | head -n1)"
+          CURRENT_RUST="$(rustc --version | awk '{print $2}')"
+          test -n "$REQUIRED_RUST"
+          test -n "$CURRENT_RUST"
+          echo "Upstream MSRV: $REQUIRED_RUST"
+          echo "Runner rustc: $CURRENT_RUST"
+          if [ "$(printf '%s\n%s\n' "$REQUIRED_RUST" "$CURRENT_RUST" | sort -V | head -n1)" != "$REQUIRED_RUST" ]; then
+            echo "ERROR: rustc $CURRENT_RUST is older than upstream MSRV $REQUIRED_RUST" >&2
+            exit 1
+          fi
+
+      - name: Install build and packaging tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y jq curl tar xz-utils zstd dos2unix upx-ucl file binutils
+
+          CROSS_TAG="$(curl -fsSL https://api.github.com/repos/cross-rs/cross/releases/latest | jq -r .tag_name)"
+          curl -fsSL "https://github.com/cross-rs/cross/releases/download/${CROSS_TAG}/cross-x86_64-unknown-linux-musl.tar.gz" | tar -xz
+          sudo install -m 0755 cross /usr/local/bin/cross
+
+          NFPM_TAG="$(curl -fsSL https://api.github.com/repos/goreleaser/nfpm/releases/latest | jq -r .tag_name)"
+          NFPM_VER="${NFPM_TAG#v}"
+          curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/${NFPM_TAG}/nfpm_${NFPM_VER}_Linux_x86_64.tar.gz" | tar -xz
+          sudo install -m 0755 nfpm /usr/local/bin/nfpm
+
+      - name: Build aarch64 Telemt 3.5.6 locked
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cd upstream_src
+          export CARGO_PROFILE_RELEASE_OPT_LEVEL=z
+          export CARGO_PROFILE_RELEASE_LTO=true
+          export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+          export CARGO_PROFILE_RELEASE_PANIC=abort
+          export CARGO_PROFILE_RELEASE_STRIP=true
+          cross build --release --locked --target "$AARCH64_TARGET"
+          cd ..
+
+          upx --best --lzma "upstream_src/target/${AARCH64_TARGET}/release/telemt"
+          cp "upstream_src/target/${AARCH64_TARGET}/release/telemt" "$AARCH64_OUT_BIN"
+          printf '\nMTProxy v%s\n' "$VERSION" >> "$AARCH64_OUT_BIN"
+          chmod 0755 "$AARCH64_OUT_BIN"
+          file "$AARCH64_OUT_BIN"
+          tail -c 512 "$AARCH64_OUT_BIN" | grep -a -q "MTProxy v${VERSION}"
+
+      - name: Verify upstream x86_64 release and trailer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          mkdir -p upstream_release extracted_x86_64
+          gh release download "$VERSION" \
+            --repo "$UPSTREAM_REPO" \
+            --pattern "$X86_64_ASSET_NAME" \
+            --pattern "$X86_64_ASSET_SHA256_NAME" \
+            --dir upstream_release
+
+          cd upstream_release
+          sha256sum -c "$X86_64_ASSET_SHA256_NAME"
+          cd ..
+
+          tar -xzf "upstream_release/$X86_64_ASSET_NAME" -C extracted_x86_64
+          BIN_PATH="$(find extracted_x86_64 -type f -name telemt | head -n1)"
+          test -n "$BIN_PATH"
+          install -m 0755 "$BIN_PATH" "$X86_64_OUT_BIN"
+          printf '\nMTProxy v%s\n' "$VERSION" >> "$X86_64_OUT_BIN"
+          tail -c 512 "$X86_64_OUT_BIN" | grep -a -q "MTProxy v${VERSION}"
+
+      - name: Build representative IPK and APK
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          dos2unix files/telemt.init files/telemt.config files/telemt-web-check \
+            files/telemt-web-frontend files/telemt-web-haproxy.hotplug
+
+          cat > nfpm-ci.yaml <<EOF
+          name: telemt
+          arch: aarch64_generic
+          platform: linux
+          version: ${VERSION}
+          section: net
+          priority: optional
+          maintainer: Telemt Team
+          description: Telemt 3.5.6 WEB branch CI package
+          contents:
+            - src: ./${AARCH64_OUT_BIN}
+              dst: /usr/bin/telemt
+              file_info:
+                mode: 0755
+            - src: ./files/telemt.init
+              dst: /etc/init.d/telemt
+              file_info:
+                mode: 0755
+            - src: ./files/telemt-web-check
+              dst: /usr/libexec/telemt-web-check
+              file_info:
+                mode: 0755
+            - src: ./files/telemt-web-frontend
+              dst: /usr/libexec/telemt-web-frontend
+              file_info:
+                mode: 0755
+            - src: ./files/telemt-web-haproxy.hotplug
+              dst: /etc/hotplug.d/acme/95-telemt-web-haproxy
+              file_info:
+                mode: 0755
+            - src: ./files/telemt.config
+              dst: /etc/config/telemt
+              type: config
+              file_info:
+                mode: 0644
+          EOF
+
+          nfpm package --config nfpm-ci.yaml --packager ipk --target telemt-ci.ipk
+          nfpm package --config nfpm-ci.yaml --packager apk --target telemt-ci.apk
+          test -s telemt-ci.ipk
+          test -s telemt-ci.apk
+
+          mkdir -p ipk-unpack
+          cd ipk-unpack
+          ar x ../telemt-ci.ipk
+          DATA_ARCHIVE="$(find . -maxdepth 1 -type f -name 'data.tar.*' | head -n1)"
+          test -n "$DATA_ARCHIVE"
+          tar -tf "$DATA_ARCHIVE" > ../ipk-files.txt
+          cd ..
+
+          tar -tf telemt-ci.apk > apk-files.txt
+          for path in \
+            usr/bin/telemt \
+            etc/init.d/telemt \
+            usr/libexec/telemt-web-check \
+            usr/libexec/telemt-web-frontend \
+            etc/hotplug.d/acme/95-telemt-web-haproxy \
+            etc/config/telemt; do
+            grep -Eq "(^|\./)${path}$" ipk-files.txt
+            grep -Eq "(^|\./)${path}$" apk-files.txt
+          done
+
+      - name: Upload CI packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: telemt-3.5.6-web-ci
+          retention-days: 7
+          path: |
+            telemt-aarch64-musl
+            telemt-x86_64-musl
+            telemt-ci.ipk
+            telemt-ci.apk
+            ipk-files.txt
+            apk-files.txt
