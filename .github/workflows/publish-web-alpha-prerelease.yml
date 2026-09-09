@@ -1,0 +1,216 @@
+name: Publish Telemt WEB alpha prerelease
+
+on:
+  push:
+    branches: [telemt-3.5.6-web]
+    paths: [.github/workflows/publish-web-alpha-prerelease.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      TAG: 3.5.6-web-alpha1
+      CORE_RUN: '34360112489'
+      LUCI_REF: telemt-3.5.6-web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: telemt-3.5.6-web
+
+      - name: Install tools
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y jq curl unzip tar gzip
+          NFPM_TAG="$(curl -fsSL https://api.github.com/repos/goreleaser/nfpm/releases/latest | jq -r .tag_name)"
+          NFPM_VER="${NFPM_TAG#v}"
+          curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/${NFPM_TAG}/nfpm_${NFPM_VER}_Linux_x86_64.tar.gz" | tar -xz
+          sudo install -m 0755 nfpm /usr/local/bin/nfpm
+
+      - name: Setup owfeed
+        uses: owfeed/owfeed/setup@v0.5.1
+        with:
+          version: v0.5.1
+
+      - name: Download verified core artifact
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: Medvedolog/telemt_owrt
+          run-id: ${{ env.CORE_RUN }}
+          name: telemt-3.5.6-web-ci
+          path: core-artifact
+
+      - name: Checkout LuCI WEB branch
+        uses: actions/checkout@v4
+        with:
+          repository: Medvedolog/luci-app-telemt
+          ref: ${{ env.LUCI_REF }}
+          path: luci-src
+
+      - name: Build complete core IPK set and stage APKv3
+        run: |
+          set -euxo pipefail
+          mkdir -p release/core/ipk release/core/apk
+          for arch in aarch64_generic aarch64_cortex-a53 x86_64; do
+            bin=core-artifact/telemt-aarch64-musl
+            [ "$arch" = x86_64 ] && bin=core-artifact/telemt-x86_64-musl
+            cat > core-${arch}.yaml <<EOF
+          name: telemt
+          arch: ${arch}
+          platform: linux
+          version: 3.5.6-alpha1
+          section: net
+          priority: optional
+          maintainer: Telemt Team
+          description: Telemt 3.5.6 WEB alpha test package
+          contents:
+            - src: ./${bin}
+              dst: /usr/bin/telemt
+              file_info: {mode: 0755}
+            - src: ./files/telemt.init
+              dst: /etc/init.d/telemt
+              file_info: {mode: 0755}
+            - src: ./files/telemt-web-check
+              dst: /usr/libexec/telemt-web-check
+              file_info: {mode: 0755}
+            - src: ./files/telemt-web-frontend
+              dst: /usr/libexec/telemt-web-frontend
+              file_info: {mode: 0755}
+            - src: ./files/telemt-web-nginx
+              dst: /usr/libexec/telemt-web-nginx
+              file_info: {mode: 0755}
+            - src: ./files/telemt-web-haproxy.hotplug
+              dst: /etc/hotplug.d/acme/95-telemt-web-haproxy
+              file_info: {mode: 0755}
+            - src: ./files/telemt.config
+              dst: /etc/config/telemt
+              type: config
+              file_info: {mode: 0644}
+          EOF
+            nfpm package --config core-${arch}.yaml --packager ipk --target "release/core/ipk/telemt_3.5.6-web-alpha1_${arch}.ipk"
+            test -s "release/core/ipk/telemt_3.5.6-web-alpha1_${arch}.ipk"
+            cp "core-artifact/dist/${arch}/telemt-3.5.6-r1.apk" "release/core/apk/telemt_3.5.6-web-alpha1_${arch}.apk"
+            test "$(od -An -tx1 -N3 release/core/apk/telemt_3.5.6-web-alpha1_${arch}.apk | tr -d ' \n')" = 414442
+          done
+
+      - name: Build LuCI IPK
+        run: |
+          set -euxo pipefail
+          cd luci-src
+          cat > ../luci-alpha.yaml <<'EOF'
+          name: luci-app-telemt
+          platform: linux
+          version: 3.5.6-alpha1
+          section: net
+          maintainer: Medvedolog
+          description: LuCI for Telemt 3.5.6 WEB alpha
+          depends: [libc, luci-base, luci-compat, qrencode, ca-bundle]
+          contents:
+            - src: ./usr
+              dst: /usr
+          scripts:
+            postinstall: ./scripts/postinst
+            preremove: ./scripts/prerm
+            postremove: ./scripts/postrm
+          ipk:
+            arch: all
+          EOF
+          nfpm package --config ../luci-alpha.yaml --packager ipk --target ../luci-app-telemt_3.5.6-web-alpha1_all.ipk
+          cd ..
+          mkdir -p release/luci/ipk release/luci/apk
+          mv luci-app-telemt_3.5.6-web-alpha1_all.ipk release/luci/ipk/
+
+      - name: Build LuCI OpenWrt APKv3 with owfeed
+        run: |
+          set -euxo pipefail
+          mkdir -p .luci-stage/noarch
+          cp -a luci-src/usr .luci-stage/noarch/
+          cat > luci-owfeed.yml <<'EOF'
+          version: 1
+          feed:
+            name: telemt-web-alpha
+            url: https://example.invalid/telemt-web-alpha
+            title: Telemt WEB Alpha
+            maintainer: "Medvedolog <noreply@example.invalid>"
+          publish:
+            - target: github-pages
+          build:
+            sdk:
+              release: "25.12.2"
+          releases:
+            - line: "25.12"
+              format: apk
+              default: true
+              arches: [noarch]
+          packages:
+            - name: luci-app-telemt
+              build: mkpkg
+              arch: [noarch]
+              version: 3.5.6-alpha1
+              files: ./.luci-stage/{arch}
+              description: "LuCI for Telemt 3.5.6 WEB alpha"
+              url: https://github.com/Medvedolog/luci-app-telemt
+              depends: [libc, luci-base, luci-compat, qrencode, ca-bundle]
+          EOF
+          owfeed --config luci-owfeed.yml lock --update
+          owfeed --config luci-owfeed.yml build --release 25.12 -o luci-dist
+          apk="luci-dist/noarch/luci-app-telemt-3.5.6-alpha1.apk"
+          test -s "$apk"
+          test "$(od -An -tx1 -N3 "$apk" | tr -d ' \n')" = 414442
+          cp "$apk" release/luci/apk/luci-app-telemt_3.5.6-web-alpha1_noarch.apk
+
+      - name: Verify complete package matrix
+        run: |
+          set -euxo pipefail
+          test "$(find release/core/ipk -name '*.ipk' | wc -l)" -eq 3
+          test "$(find release/core/apk -name '*.apk' | wc -l)" -eq 3
+          test "$(find release/luci/ipk -name '*.ipk' | wc -l)" -eq 1
+          test "$(find release/luci/apk -name '*.apk' | wc -l)" -eq 1
+          find release -type f -maxdepth 4 -print | sort
+          sha256sum release/core/ipk/* release/core/apk/* release/luci/ipk/* release/luci/apk/* > release/SHA256SUMS
+
+      - name: Write release notes
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## Telemt 3.5.6 WEB Proxy — alpha 1
+
+          **Это полная альфа для тестирования, не stable release.** Не ставьте её на единственный критичный роутер без возможности отката.
+
+          Что появилось:
+          - WEB Proxy transport Telemt 3.5.6 с четырьмя carrier: `https`, `https-lanes`, `websocket`, `websocket-lanes`;
+          - Fixed и Auto negotiation, ordered candidates, fallback, carrier learning и aggressiveness;
+          - отдельная LuCI-страница **WEB Proxy** с private backend `127.0.0.1:27453`, VHost/Profile, External/HAProxy/NGINX frontend;
+          - shared Users: WEB использует тех же пользователей и secrets, без второй базы;
+          - в Users добавлены WEB bindings, готовые `tg://webproxy` links/QR и безопасное удаление bindings;
+          - disabled WEB изолирован: битые WEB Auto-настройки не должны ломать Classic/DD/FakeTLS;
+          - HAProxy/NGINX paths подготовлены для HTTP/2 lanes и WebSocket Upgrade.
+
+          ### Что ставить
+          **OpenWrt 24.10:** `core/ipk` + `luci/ipk`.
+
+          **OpenWrt 25.12:** `core/apk` + `luci/apk`. APKv3 собраны через **owfeed**.
+
+          Core есть для `aarch64_generic`, `aarch64_cortex-a53`, `x86_64`. LuCI: `all.ipk` / `noarch.apk`.
+
+          ### Очень просим протестировать
+          Нужны реальные тесты именно на **OpenWrt 24.10 и 25.12**: upgrade с существующей конфигурацией, Classic/DD/FakeTLS при WEB=off, затем WEB `https`, `https-lanes`, `websocket`, `websocket-lanes`, Auto, reconnect/media/idle-resume, а также HAProxy/NGINX/External frontend.
+
+          При проблеме приложите: `uci show telemt`, `logread -e telemt`, `/tmp/etc/telemt.toml` (секреты предварительно удалите) и версию OpenWrt/архитектуру.
+
+          Сборки относятся только к веткам `telemt-3.5.6-web`; `main` не изменён.
+          EOF
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then gh release delete "$TAG" -y --cleanup-tag; fi
+          gh release create "$TAG" --prerelease --target telemt-3.5.6-web --title "Telemt 3.5.6 WEB Proxy alpha 1" --notes-file release-notes.md \
+            release/core/ipk/* release/core/apk/* release/luci/ipk/* release/luci/apk/* release/SHA256SUMS
