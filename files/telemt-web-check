@@ -7,6 +7,8 @@
 
 CONF="/tmp/etc/telemt.toml"
 HAPROXY_MARKER='# TELEMT-MANAGED-HAPROXY v1'
+NGINX_MARKER='# TELEMT-MANAGED-NGINX v1'
+NGINX_FRAGMENT=/etc/nginx/conf.d/telemt-web.conf
 
 config_load telemt
 
@@ -14,6 +16,7 @@ config_get_bool web_enabled web enabled 0
 config_get web_frontend web tls_terminator "external"
 config_get web_carrier web carrier "https"
 config_get_bool haproxy_managed web haproxy_managed 0
+config_get_bool nginx_managed web nginx_managed 0
 config_get_bool web_listener_enabled web_listener enabled 1
 config_get web_ip web_listener ip "127.0.0.1"
 config_get web_port web_listener port "27453"
@@ -109,7 +112,19 @@ case "$web_frontend" in
         fi
         ;;
     nginx)
-        echo "  warning: managed NGINX frontend is not implemented yet; configure NGINX externally"
+        if [ "$nginx_managed" -eq 1 ]; then
+            if [ ! -f "$NGINX_FRAGMENT" ] || ! grep -qF "$NGINX_MARKER" "$NGINX_FRAGMENT" 2>/dev/null; then
+                echo "  error: managed NGINX selected but ${NGINX_FRAGMENT} is not Telemt-managed"
+                status=1
+            elif ! pidof nginx >/dev/null 2>&1; then
+                echo "  error: managed NGINX fragment is installed but NGINX is not running"
+                status=1
+            else
+                echo "  nginx_frontend: managed/running"
+            fi
+        else
+            echo "  warning: NGINX selected in external mode; Telemt does not modify NGINX configuration"
+        fi
         ;;
     *)
         echo "  error: unknown tls_frontend '${web_frontend}'"
