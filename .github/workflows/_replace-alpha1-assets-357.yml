@@ -1,0 +1,363 @@
+name: Replace alpha1 assets with Telemt 3.5.7
+
+on:
+  push:
+    branches: [telemt-3.5.6-web]
+    paths: [.github/workflows/_replace-alpha1-assets-357.yml]
+
+permissions:
+  contents: write
+  actions: read
+  attestations: read
+
+jobs:
+  replace:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: 3.5.6-web-alpha1
+      VERSION: 3.5.7
+      AARCH64_TARGET: aarch64-unknown-linux-musl
+    steps:
+      - name: Checkout core WEB branch
+        uses: actions/checkout@v4
+        with:
+          ref: telemt-3.5.6-web
+
+      - name: Install build tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y jq curl tar gzip xz-utils zstd dos2unix upx-ucl file binutils lua5.1
+          CROSS_TAG="$(curl -fsSL https://api.github.com/repos/cross-rs/cross/releases/latest | jq -r .tag_name)"
+          curl -fsSL "https://github.com/cross-rs/cross/releases/download/${CROSS_TAG}/cross-x86_64-unknown-linux-musl.tar.gz" | tar -xz
+          sudo install -m 0755 cross /usr/local/bin/cross
+          NFPM_TAG="$(curl -fsSL https://api.github.com/repos/goreleaser/nfpm/releases/latest | jq -r .tag_name)"
+          NFPM_VER="${NFPM_TAG#v}"
+          curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/${NFPM_TAG}/nfpm_${NFPM_VER}_Linux_x86_64.tar.gz" | tar -xz
+          sudo install -m 0755 nfpm /usr/local/bin/nfpm
+
+      - name: Setup verified owfeed
+        uses: owfeed/owfeed/setup@v0.5.1
+        with:
+          version: v0.5.1
+
+      - name: Checkout upstream Telemt 3.5.7
+        uses: actions/checkout@v4
+        with:
+          repository: telemt/telemt
+          ref: 3.5.7
+          path: upstream_src
+
+      - name: Verify upstream 3.5.7
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -f upstream_src/Cargo.lock
+          grep -q '^version = "3\.5\.7"' upstream_src/Cargo.toml
+          grep -q 'direct_relay_buffer_budget_max_bytes' upstream_src/src/config/types/general.rs
+          grep -q 'option direct_relay_buffer_budget_max_mib' files/telemt.config
+          grep -q 'direct_relay_buffer_budget_max_bytes = $direct_relay_buffer_budget_max_bytes' files/telemt.init
+          sh -n files/telemt.init
+
+      - name: Build aarch64 Telemt 3.5.7 locked
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd upstream_src
+          export CARGO_PROFILE_RELEASE_OPT_LEVEL=z
+          export CARGO_PROFILE_RELEASE_LTO=true
+          export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+          export CARGO_PROFILE_RELEASE_PANIC=abort
+          export CARGO_PROFILE_RELEASE_STRIP=true
+          cross build --release --locked --target "$AARCH64_TARGET"
+          cd ..
+          upx --best --lzma "upstream_src/target/${AARCH64_TARGET}/release/telemt"
+          cp "upstream_src/target/${AARCH64_TARGET}/release/telemt" telemt-aarch64-musl
+          printf '\nMTProxy v%s\n' "$VERSION" >> telemt-aarch64-musl
+          chmod 0755 telemt-aarch64-musl
+          tail -c 512 telemt-aarch64-musl | grep -a -q 'MTProxy v3.5.7'
+
+      - name: Verify upstream x86_64 release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p upstream_release extracted_x86_64
+          gh release download "$VERSION" --repo telemt/telemt \
+            --pattern 'telemt-x86_64-linux-musl.tar.gz' \
+            --pattern 'telemt-x86_64-linux-musl.tar.gz.sha256' \
+            --dir upstream_release
+          cd upstream_release
+          sha256sum -c telemt-x86_64-linux-musl.tar.gz.sha256
+          cd ..
+          tar -xzf upstream_release/telemt-x86_64-linux-musl.tar.gz -C extracted_x86_64
+          BIN="$(find extracted_x86_64 -type f -name telemt | head -n1)"
+          test -n "$BIN"
+          install -m 0755 "$BIN" telemt-x86_64-musl
+          printf '\nMTProxy v%s\n' "$VERSION" >> telemt-x86_64-musl
+          tail -c 512 telemt-x86_64-musl | grep -a -q 'MTProxy v3.5.7'
+
+      - name: Build core IPK matrix with nFPM
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p release/core/ipk .stage-core
+          for arch in aarch64_generic aarch64_cortex-a53 x86_64; do
+            bin=telemt-aarch64-musl
+            [ "$arch" = x86_64 ] && bin=telemt-x86_64-musl
+            cat > "core-${arch}.yaml" <<EOF
+          name: telemt
+          arch: ${arch}
+          platform: linux
+          version: 3.5.7
+          release: 1
+          section: net
+          priority: optional
+          maintainer: Telemt Team
+          description: Telemt 3.5.7 WEB alpha test package
+          contents:
+            - src: ./${bin}
+              dst: /usr/bin/telemt
+              file_info: {mode: 0755}
+            - src: ./files/telemt.init
+              dst: /etc/init.d/telemt
+              file_info: {mode: 0755}
+            - src: ./files/telemt-web-check
+              dst: /usr/libexec/telemt-web-check
+              file_info: {mode: 0755}
+            - src: ./files/telemt-web-frontend
+              dst: /usr/libexec/telemt-web-frontend
+              file_info: {mode: 0755}
+            - src: ./files/telemt-web-nginx
+              dst: /usr/libexec/telemt-web-nginx
+              file_info: {mode: 0755}
+            - src: ./files/telemt-web-haproxy.hotplug
+              dst: /etc/hotplug.d/acme/95-telemt-web-haproxy
+              file_info: {mode: 0755}
+            - src: ./files/telemt.config
+              dst: /etc/config/telemt
+              type: config
+              file_info: {mode: 0644}
+          EOF
+            nfpm package --config "core-${arch}.yaml" --packager ipk --target "release/core/ipk/telemt_3.5.7-web-alpha1_${arch}.ipk"
+          done
+          test "$(find release/core/ipk -name '*.ipk' | wc -l)" -eq 3
+
+      - name: Build core OpenWrt 25.12 APKv3 via owfeed
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf .stage-core dist-core
+          for arch in aarch64_generic aarch64_cortex-a53 x86_64; do
+            root=".stage-core/${arch}"
+            mkdir -p "$root/usr/bin" "$root/etc/init.d" "$root/etc/config" "$root/usr/libexec" "$root/etc/hotplug.d/acme"
+            bin=telemt-aarch64-musl
+            [ "$arch" = x86_64 ] && bin=telemt-x86_64-musl
+            install -m 0755 "$bin" "$root/usr/bin/telemt"
+            install -m 0755 files/telemt.init "$root/etc/init.d/telemt"
+            install -m 0755 files/telemt-web-check "$root/usr/libexec/telemt-web-check"
+            install -m 0755 files/telemt-web-frontend "$root/usr/libexec/telemt-web-frontend"
+            install -m 0755 files/telemt-web-nginx "$root/usr/libexec/telemt-web-nginx"
+            install -m 0755 files/telemt-web-haproxy.hotplug "$root/etc/hotplug.d/acme/95-telemt-web-haproxy"
+            install -m 0644 files/telemt.config "$root/etc/config/telemt"
+          done
+          cat > core-owfeed.yml <<'EOF'
+          version: 1
+          feed:
+            name: telemt-web-alpha
+            url: https://example.invalid/telemt-web-alpha
+            title: Telemt WEB Alpha
+            maintainer: "Telemt Team <noreply@example.invalid>"
+          publish:
+            - target: github-pages
+          build:
+            sdk:
+              release: "25.12.2"
+          releases:
+            - line: "25.12"
+              format: apk
+              default: true
+              arches: [aarch64_generic, aarch64_cortex-a53, x86_64]
+          packages:
+            - name: telemt
+              build: mkpkg
+              arch: [aarch64_generic, aarch64_cortex-a53, x86_64]
+              version: 3.5.7-r1
+              files: ./.stage-core/{arch}
+              description: "Telemt 3.5.7 WEB alpha"
+              url: https://github.com/Medvedolog/telemt_owrt
+              conffiles: ["/etc/config/telemt"]
+          EOF
+          owfeed --config core-owfeed.yml lock --update
+          owfeed --config core-owfeed.yml build --release 25.12 -o dist-core
+          mkdir -p release/core/apk
+          for arch in aarch64_generic aarch64_cortex-a53 x86_64; do
+            src="dist-core/${arch}/telemt-3.5.7-r1.apk"
+            test -s "$src"
+            test "$(od -An -tx1 -N3 "$src" | tr -d ' \n')" = 414442
+            cp "$src" "release/core/apk/telemt_3.5.7-web-alpha1_${arch}.apk"
+          done
+
+      - name: Checkout LuCI WEB branch
+        uses: actions/checkout@v4
+        with:
+          repository: Medvedolog/luci-app-telemt
+          ref: telemt-3.5.6-web
+          path: luci-src
+
+      - name: Validate LuCI memory control
+        shell: bash
+        run: |
+          set -euxo pipefail
+          for f in \
+            luci-src/usr/lib/lua/luci/model/cbi/telemt.lua \
+            luci-src/usr/lib/lua/luci/model/cbi/telemt_legacy.lua \
+            luci-src/usr/lib/lua/luci/model/cbi/telemt_web.lua \
+            luci-src/usr/lib/lua/luci/model/cbi/telemt_users_web.lua \
+            luci-src/usr/lib/lua/luci/model/cbi/telemt_memory_budget.lua; do
+            luac5.1 -p "$f"
+          done
+          grep -q 'direct_relay_buffer_budget_max_mib' luci-src/usr/lib/lua/luci/model/cbi/telemt_memory_budget.lua
+          grep -q 'memory_budget.attach' luci-src/usr/lib/lua/luci/model/cbi/telemt.lua
+
+      - name: Build LuCI IPK with nFPM
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd luci-src
+          cat > ../luci-nfpm.yml <<'EOF'
+          name: luci-app-telemt
+          platform: linux
+          version: 3.5.7
+          release: 1
+          section: net
+          maintainer: Medvedolog
+          description: LuCI for Telemt 3.5.7 WEB alpha
+          depends: [libc, luci-base, luci-compat, qrencode, ca-bundle]
+          contents:
+            - src: ./usr
+              dst: /usr
+          scripts:
+            postinstall: ./scripts/postinst
+            preremove: ./scripts/prerm
+            postremove: ./scripts/postrm
+          ipk:
+            arch: all
+          EOF
+          nfpm package --config ../luci-nfpm.yml --packager ipk --target ../luci-app-telemt_3.5.7-web-alpha1_all.ipk
+          cd ..
+          mkdir -p release/luci/ipk
+          mv luci-app-telemt_3.5.7-web-alpha1_all.ipk release/luci/ipk/
+          rm -rf .inspect-luci-ipk && mkdir .inspect-luci-ipk
+          tar -xzf release/luci/ipk/luci-app-telemt_3.5.7-web-alpha1_all.ipk -C .inspect-luci-ipk
+          tar -tzf .inspect-luci-ipk/data.tar.gz > .inspect-luci-ipk/files.txt
+          grep -q 'telemt_memory_budget.lua' .inspect-luci-ipk/files.txt
+          if grep -Eq '(^|\./)etc/config/telemt$' .inspect-luci-ipk/files.txt; then exit 1; fi
+
+      - name: Build LuCI OpenWrt 25.12 APKv3 via owfeed
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf .stage-luci dist-luci
+          mkdir -p .stage-luci/noarch
+          cp -a luci-src/usr .stage-luci/noarch/
+          cat > luci-owfeed.yml <<'EOF'
+          version: 1
+          feed:
+            name: telemt-web-alpha-luci
+            url: https://example.invalid/telemt-web-alpha-luci
+            title: Telemt WEB Alpha LuCI
+            maintainer: "Medvedolog <noreply@example.invalid>"
+          publish:
+            - target: github-pages
+          build:
+            sdk:
+              release: "25.12.2"
+          releases:
+            - line: "25.12"
+              format: apk
+              default: true
+              arches: [noarch]
+          packages:
+            - name: luci-app-telemt
+              build: mkpkg
+              arch: [noarch]
+              version: 3.5.7-r1
+              files: ./.stage-luci/{arch}
+              description: "LuCI for Telemt 3.5.7 WEB alpha"
+              url: https://github.com/Medvedolog/luci-app-telemt
+              depends: [libc, luci-base, luci-compat, qrencode, ca-bundle]
+          EOF
+          owfeed --config luci-owfeed.yml lock --update
+          owfeed --config luci-owfeed.yml build --release 25.12 -o dist-luci
+          src='dist-luci/noarch/luci-app-telemt-3.5.7-r1.apk'
+          test -s "$src"
+          test "$(od -An -tx1 -N3 "$src" | tr -d ' \n')" = 414442
+          mkdir -p release/luci/apk
+          cp "$src" release/luci/apk/luci-app-telemt_3.5.7-web-alpha1_noarch.apk
+
+      - name: Verify complete replacement matrix
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(find release/core/ipk -name '*.ipk' | wc -l)" -eq 3
+          test "$(find release/core/apk -name '*.apk' | wc -l)" -eq 3
+          test "$(find release/luci/ipk -name '*.ipk' | wc -l)" -eq 1
+          test "$(find release/luci/apk -name '*.apk' | wc -l)" -eq 1
+          sha256sum release/core/ipk/* release/core/apk/* release/luci/ipk/* release/luci/apk/* > release/SHA256SUMS
+          find release -type f -maxdepth 4 -print | sort
+
+      - name: Write updated release notes
+        shell: bash
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## Telemt 3.5.7 WEB Proxy — alpha 1
+
+          **Полная альфа для тестирования. Не stable.** Этот pre-release обновлён на upstream **Telemt 3.5.7**; tag `3.5.6-web-alpha1` сохранён, чтобы не плодить отдельный тестовый релиз.
+
+          Что внутри:
+          - WEB Proxy: `https`, `https-lanes`, `websocket`, `websocket-lanes`;
+          - Fixed и Auto negotiation, ordered candidates, fallback, carrier learning;
+          - исправления upstream 3.5.7 для stale `websocket-lanes` после restart и совместимости native macOS status schema;
+          - отдельная LuCI-страница WEB Proxy, External/HAProxy/NGINX frontend;
+          - общая база Users/secrets для старых и WEB-транспортов, WEB links/QR в Users;
+          - новый **Direct relay memory budget** в LuCI → General Settings: `0 = Auto (recommended)`, вручную `16–2048 MiB`;
+          - это лимит Direct relay copy buffers Telemt, а не общий cgroup/OOM-лимит всего процесса;
+          - WEB=off остаётся изолированным и не должен ломать Classic/DD/FakeTLS.
+
+          ### Что ставить
+          **OpenWrt 24.10:** core `.ipk` своей архитектуры + `luci-app-telemt_..._all.ipk`.
+
+          **OpenWrt 25.12:** core `.apk` своей архитектуры + `luci-app-telemt_..._noarch.apk`. Оба APKv3 собраны через **owfeed**.
+
+          Core: `aarch64_generic`, `aarch64_cortex-a53`, `x86_64`.
+
+          ### Просим тестировать
+          Особенно нужны тесты на **OpenWrt 24.10 и 25.12**: обновление поверх существующей конфигурации, Classic/DD/FakeTLS при WEB=off, все четыре WEB carrier, Auto/reconnect/media/idle-resume, External/HAProxy/NGINX и memory budget в Auto/ручном режиме.
+
+          При баге приложите версию OpenWrt/архитектуру, `uci show telemt`, `logread -e telemt` и `/tmp/etc/telemt.toml` без секретов.
+
+          `main` не изменён; это сборки из веток `telemt-3.5.6-web`.
+          EOF
+
+      - name: Replace assets in the existing prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(gh release view "$RELEASE_TAG" --json isPrerelease --jq .isPrerelease)" = true
+          for asset in $(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name'); do
+            case "$asset" in
+              telemt_*.ipk|telemt_*.apk|luci-app-telemt_*.ipk|luci-app-telemt_*.apk|SHA256SUMS)
+                gh release delete-asset "$RELEASE_TAG" "$asset" -y
+                ;;
+            esac
+          done
+          gh release upload "$RELEASE_TAG" \
+            release/core/ipk/* release/core/apk/* release/luci/ipk/* release/luci/apk/* release/SHA256SUMS
+          gh release edit "$RELEASE_TAG" --prerelease --title 'Telemt 3.5.7 WEB Proxy alpha 1' --notes-file release-notes.md
+          test "$(gh release view "$RELEASE_TAG" --json assets --jq '[.assets[] | select(.name|test("^(telemt_|luci-app-telemt_).*(ipk|apk)$"))] | length')" -eq 8
+          gh release view "$RELEASE_TAG" --json name,isPrerelease,assets --jq '{name,isPrerelease,assets:[.assets[].name]}'
