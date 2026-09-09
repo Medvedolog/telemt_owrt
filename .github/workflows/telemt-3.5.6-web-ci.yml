@@ -49,17 +49,29 @@ jobs:
           grep -q 'proxy_set_header X-Forwarded-For $remote_addr;' files/telemt-web-nginx
           grep -q 'proxy_next_upstream off;' files/telemt-web-nginx
 
-          # LAB-5A fixed carrier matrix: exact upstream enum, safe HTTPS fallback,
-          # and no auto-negotiation fields before LAB-5B.
+          # LAB-5A/5B carrier contract: all four exact enum values remain valid,
+          # fixed remains the safe default, and auto negotiation is explicit.
           grep -q 'https|https-lanes|websocket|websocket-lanes) ;;' files/telemt.init
           grep -q 'web_carrier="https"' files/telemt.init
           grep -q 'carrier = "$web_carrier"' files/telemt.init
-          if grep -qE '^[[:space:]]*(carriers|carrier_learning|carrier_negotiation_aggressiveness)[[:space:]]*=' files/telemt.init; then
-            echo 'ERROR: LAB-5A must not generate WEB auto-negotiation fields' >&2
-            exit 1
-          fi
+          grep -q "option carrier_policy 'fixed'" files/telemt.config
+          grep -q "list carrier_candidate 'websocket-lanes'" files/telemt.config
+          grep -q "list carrier_candidate 'websocket'" files/telemt.config
+          grep -q "list carrier_candidate 'https-lanes'" files/telemt.config
+          grep -q "option carrier_learning '1'" files/telemt.config
+          grep -q "option carrier_negotiation_aggressiveness 'conservative'" files/telemt.config
+          grep -q 'config_get web_carrier_policy web carrier_policy "fixed"' files/telemt.init
+          grep -q 'fixed|auto) ;;' files/telemt.init
+          grep -q 'config_list_foreach web carrier_candidate add_web_carrier_candidate' files/telemt.init
+          grep -q 'WEB auto carrier policy requires at least one carrier_candidate' files/telemt.init
+          grep -q 'duplicate WEB auto carrier candidate' files/telemt.init
+          grep -q 'if \[ "$web_carrier_policy" = "auto" \]; then' files/telemt.init
+          grep -q 'echo "carriers = \[\$web_carriers_toml\]"' files/telemt.init
+          grep -q 'carrier_learning = true' files/telemt.init
+          grep -q 'carrier_learning = false' files/telemt.init
+          grep -q 'carrier_negotiation_aggressiveness = \\"\$web_carrier_negotiation_aggressiveness\\"' files/telemt.init
 
-          # Frontend prerequisites for all four fixed carriers.
+          # Frontend prerequisites for all four carriers and auto negotiation.
           grep -q 'alpn h2,http/1.1' files/telemt-web-frontend
           grep -q 'retries 0' files/telemt-web-frontend
           grep -q 'http2 on;' files/telemt-web-nginx
