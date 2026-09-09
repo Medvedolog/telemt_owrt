@@ -1,0 +1,33 @@
+name: Validate disabled WEB isolation
+
+on:
+  push:
+    branches:
+      - telemt-3.5.6-web
+  workflow_dispatch:
+
+jobs:
+  n5:
+    name: N5 disabled WEB isolation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout working branch
+        uses: actions/checkout@v4
+
+      - name: Validate disabled WEB isolation guard
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sh -n files/telemt.init
+
+          # Strict carrier_candidate validation must only run when WEB itself is enabled.
+          grep -Fq 'if [ "$web_enabled" -eq 1 ] && [ "$web_carrier_policy" = "auto" ]; then' files/telemt.init
+
+          # A second policy-only guard is expected only for TOML emission after
+          # web_runtime_enabled has already gated the whole [web] block.
+          test "$(grep -Fc 'if [ "$web_carrier_policy" = "auto" ]; then' files/telemt.init)" -eq 1
+
+          # Keep the strict enabled-WEB behavior intact.
+          grep -Fq 'WEB auto carrier policy requires at least one carrier_candidate' files/telemt.init
+          grep -Fq 'invalid WEB auto carrier candidate' files/telemt.init
+          grep -Fq 'duplicate WEB auto carrier candidate' files/telemt.init
