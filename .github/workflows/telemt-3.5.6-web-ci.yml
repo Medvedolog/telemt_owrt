@@ -251,6 +251,8 @@ jobs:
             url: https://example.invalid/telemt-ci
             title: Telemt CI
             maintainer: "Telemt Team <noreply@example.invalid>"
+          publish:
+            - target: github-pages
           build:
             sdk:
               release: "25.12.2"
