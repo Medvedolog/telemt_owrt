@@ -1,89 +1,91 @@
 # Roadmap / TODO — Telemt 3.5.6 WEB Proxy for OpenWrt
 
-Projects:
+Актуально: 2026-09-09
 
-- Core/package: `Medvedolog/telemt_owrt`
+Проекты:
+
+- core/package: `Medvedolog/telemt_owrt`
 - LuCI: `Medvedolog/luci-app-telemt`
-- Working branches: `telemt-3.5.6-web`
-- Target upstream: Telemt `3.5.6 Machtprobe`
+- рабочие ветки обоих репозиториев: `telemt-3.5.6-web`
+- upstream: Telemt `3.5.6 Machtprobe`, tag `3.5.6`, commit `3693d1e2a87af0074598104338b5a4bb5bee202d`
 
-Goal:
+Upstream references:
 
-- keep Classic / DD / FakeTLS working without regression;
-- add WEB Proxy support;
-- keep one shared Users database for all transports;
-- support External / HAProxy / NGINX TLS frontend;
-- keep UCI as the only persistent source of truth;
-- keep the OpenWrt integration deterministic and router-friendly.
+- https://github.com/telemt/telemt/releases/tag/3.5.6
+- https://github.com/telemt/telemt/blob/3.5.6/docs/WEB/WEB_PROXY.ru.md
+
+## Обязательные инварианты
+
+- `/etc/config/telemt` — единственный persistent source of truth.
+- runtime TOML `/tmp/etc/telemt.toml` — disposable generated artifact.
+- Telemt не пишет UCI, LuCI не пишет TOML напрямую.
+- `config user` — единственная база пользователей для Classic/DD/FakeTLS/WEB.
+- WEB profile только ссылается на существующего пользователя и не хранит копию секрета/квоты/expiration.
+- WEB listener по умолчанию приватный: `127.0.0.1:27453`.
+- WEB transport использует HTTP/X-Forwarded-For trust model; `proxy_protocol=false`.
+- TLS frontend ровно один: External, HAProxy или NGINX.
+- WEB structural config находится до `# --- DYNAMIC CONFIG ---`, поэтому текущий core-diff корректно приводит к restart при структурных изменениях.
+- Не добавлять второй Telemt-процесс для validation, semantic hot-reload classifier или PATCH API как второй источник конфигурации.
+- Не расширять старый монолитный `telemt.lua` WEB-логикой: WEB живёт в отдельном `telemt_web.lua`.
+
+## Статус CI на момент обновления
+
+Core `telemt_owrt`:
+
+- branch head до этого docs update: `4b199062e4be66ca4d47e7a790cf7a6b54d48a72`
+- `Validate Telemt 3.5.6 WEB branch` Run #13: SUCCESS
+- проверены locked aarch64 build Telemt 3.5.6, upstream x86_64 SHA, IPK, настоящий OpenWrt APKv3 через owfeed, package payload и shell syntax.
+
+LuCI `luci-app-telemt`:
+
+- branch head: `a54dfe0e391032eb9efab861a60c96f874f1bfaa`
+- `Validate LuCI Telemt 3.5 WEB branch` Run #12: SUCCESS
+- проверены Lua 5.1 syntax, menu/ACL JSON, ownership invariant, WEB controller endpoints и NGINX controls.
+
+CI не заменяет проверку на реальном OpenWrt/router hardware и Telegram Desktop.
 
 ---
 
-## P0 — fix existing package ownership problem
+## P0 — package ownership / OpenWrt packaging
 
-### `luci-app-telemt`
+### Сделано
 
-- [ ] Fix `/etc/config/telemt` ownership conflict.
-- [ ] Remove `telemt.config` from LuCI package contents.
-- [ ] Make `telemt_owrt` the only owner of `/etc/config/telemt`.
-- [ ] Verify upgrade with both packages already installed.
-- [ ] Verify IPK.
-- [ ] Verify APK/OpenWrt 25.12.
-- [ ] Close Issue #17 after verification.
+- [x] LuCI package больше не содержит `/etc/config/telemt`.
+- [x] `telemt_owrt` остаётся единственным владельцем `/etc/config/telemt`.
+- [x] LuCI CI запрещает повторное появление этого файла в package contents.
+- [x] Core release path собирает OpenWrt 24.10 IPK.
+- [x] Core release path собирает OpenWrt 25.12 APKv3 через owfeed.
+- [x] Core CI проверяет ADB/APKv3 magic и package payload.
 
-Definition of Done:
+### Осталось
 
-```text
-telemt package owns /etc/config/telemt
-luci-app-telemt does not own it
-existing user config survives upgrade
-apk upgrade exits 0
-```
+- [ ] Проверить upgrade на реальном OpenWrt 25.12.x при уже установленных `telemt` + `luci-app-telemt`.
+- [ ] Подтвердить сохранение существующего `/etc/config/telemt` и `apk upgrade` exit code 0.
+- [ ] После этого закрыть Issue #17.
+- [ ] Перевести LuCI release workflow с nFPM APK на настоящий OpenWrt APKv3/owfeed либо принять эквивалентное решение; текущий LuCI release workflow всё ещё использует nFPM для `.apk`.
+- [ ] Отдельно решить судьбу PR #18; не смешивать packaging refactor с carrier implementation без необходимости.
 
 ---
 
-## LAB-1 — Telemt 3.5.6 without WEB
+## LAB-1 — core Telemt 3.5.6 / legacy compatibility
 
-### `telemt_owrt` build workflow
+### Сделано в коде/CI
 
-File:
+- [x] Default upstream target `3.5.6`.
+- [x] Checkout upstream tag `3.5.6`.
+- [x] Проверка upstream MSRV и `Cargo.lock`.
+- [x] `cross build --release --locked` для aarch64-musl.
+- [x] Проверка upstream x86_64 archive SHA256 до локальной модификации.
+- [x] Embedded trailer `MTProxy vX.Y.Z` сохраняется после build/extract.
+- [x] Version detection: bounded `tail -c 512` marker first.
+- [x] Legacy full-binary marker search остаётся fallback.
+- [x] `telemt --version` / `-V` остаются последним compatibility fallback.
+- [x] `strings` убран из нормального fast path.
+- [x] Старый `# --- DYNAMIC CONFIG ---` сохранён.
+- [x] Users/quotas/expiration/upstreams/ME не переписаны ради WEB.
+- [x] WEB disabled by default, то есть upgrade сам по себе не включает новый ingress.
 
-```text
-.github/workflows/telemt-release-aarch64-upx.yml
-```
-
-- [ ] Default build target = `3.5.6`.
-- [ ] Checkout upstream tag `3.5.6`.
-- [ ] Guarantee Rust `>= 1.88`.
-- [ ] Build with upstream `Cargo.lock` / `--locked`.
-- [ ] Verify aarch64-musl.
-- [ ] Verify x86_64 upstream artifact.
-- [ ] Verify upstream SHA256 before packaging modifications.
-- [ ] Keep embedded trailer `MTProxy vX.Y.Z`.
-- [ ] Append trailer only after build/UPX/extract.
-- [ ] Verify IPK/APK/raw binaries.
-
-### `files/telemt.init` — version detection
-
-- [ ] Make bounded embedded-trailer detection the primary path.
-- [ ] Read only the last 256–512 bytes of `/usr/bin/telemt`.
-- [ ] Parse `MTProxy vX.Y.Z`.
-- [ ] Cache version in `/tmp/etc/telemt.version`.
-- [ ] Keep full-binary marker search only as legacy fallback.
-- [ ] Keep `telemt --version` / `-V` as final compatibility fallback.
-- [ ] Remove `strings` from the normal fast path.
-
-### Legacy TOML
-
-- [ ] Do not change Classic/DD/FakeTLS TOML layout without need.
-- [ ] Do not add `transport="mtproxy"` merely for cosmetics.
-- [ ] Do not rewrite Users generation.
-- [ ] Do not rewrite quota/expiration handling.
-- [ ] Do not rewrite upstream generation.
-- [ ] Do not rewrite Middle-End unless 3.5.6 requires a real compatibility fix.
-- [ ] Keep `# --- DYNAMIC CONFIG ---`.
-- [ ] Keep current reload architecture for the first migration step.
-
-### LAB-1 regression matrix
+### Осталось на железе
 
 - [ ] Start / Stop / Restart / Reload / Reboot.
 - [ ] Classic.
@@ -93,281 +95,198 @@ File:
 - [ ] Direct / SOCKS / HTTP / Shadowsocks upstreams.
 - [ ] Middle-End.
 - [ ] API / metrics.
-- [ ] `client_mss`.
-- [ ] `mask_dynamic`.
-- [ ] `mask_host` / `mask_port`.
-- [ ] Users / quotas / expiration.
-- [ ] accumulated traffic stats.
-- [ ] dynamic firewall rule.
-- [ ] upgrade from existing 3.4.x UCI without manual migration.
-
-Definition of Done:
-
-```text
-Telemt 3.5.6 runs with the existing 3.4.x UCI
-WEB absent/disabled
-legacy functionality unchanged
-```
+- [ ] `client_mss`, `mask_dynamic`, `mask_host`, `mask_port`.
+- [ ] Users / quotas / expiration / accumulated stats.
+- [ ] Firewall behaviour.
+- [ ] Upgrade from existing 3.4.x UCI without manual migration.
 
 ---
 
-## LAB-1B — LuCI compatibility with core 3.5.6
+## LAB-1B — LuCI compatibility with 3.5.6
 
-Files:
+### Сделано
 
-```text
-usr/lib/lua/luci/model/cbi/telemt.lua
-nfpm.yaml
-scripts/postinst
-.github/workflows/luci-app-telemt-release.yml
-README.md
-STRUCTURE*.md
-```
+- [x] Release tag trigger принимает `3.*`, включая `3.5.*`.
+- [x] LuCI продолжает читать cached core version и не обязан запускать Telemt для UI.
+- [x] WEB вынесен в отдельный `telemt_web.lua`.
+- [x] Branch CI проверяет Lua 5.1 syntax и package ownership.
 
-- [ ] Update displayed app/core version requirements.
-- [ ] Continue reading core version from `/tmp/etc/telemt.version`.
-- [ ] Do not execute the Telemt binary from LuCI merely to display its version.
-- [ ] Verify dashboard against Telemt 3.5.6.
-- [ ] Verify Users.
-- [ ] Verify Upstreams.
-- [ ] Verify Diagnostics.
-- [ ] Verify service buttons.
-- [ ] Verify metrics polling/API requests.
-- [ ] Fix release tag trigger so `3.5.*` releases work.
-- [ ] Decide separately whether PR #18 / owfeed packaging changes are adopted.
-- [ ] Do not mix packaging-system replacement into the first WEB functional commit unless required.
+### Осталось
+
+- [ ] Обновить старые metadata/version strings в `nfpm.yaml`, `telemt.lua`, `postinst`, README/STRUCTURE, где всё ещё встречается 3.4.0 / core >=3.4.15.
+- [ ] Проверить старую Dashboard/Users/Upstreams/Diagnostics часть с core 3.5.6 на живом роутере.
+- [ ] Проверить service buttons, metrics/API polling и темы LuCI 21.02–25.x.
+- [ ] Решить LuCI APKv3 packaging отдельно от WEB feature work.
 
 ---
 
 ## LAB-2 — minimal WEB backend
 
-### `files/telemt.config`
+### Сделано
 
-Add UCI sections.
-
-#### WEB global
-
-```uci
-config web 'web'
-        option enabled '0'
-        option carrier 'https'
-        option tls_terminator 'external'
-        option memory_profile 'standard'
-```
-
-#### WEB listener
-
-```uci
-config web_listener 'web_listener'
-        option ip '127.0.0.1'
-        option port '27453'
-        option client_ip_source 'x_forwarded_for'
-        list trusted_proxy_cidr '127.0.0.1/32'
-```
-
-#### VHost
-
-```uci
-config web_vhost
-        option enabled '1'
-        option name 'main'
-        option host 'proxy.example.com'
-        option public_addr '203.0.113.10:443'
-        option decoy_mode 'http_upstream'
-        option decoy_upstream 'http://127.0.0.1:27454'
-```
-
-#### Profile
-
-```uci
-config web_profile
-        option enabled '1'
-        option vhost 'main'
-        option user 'medved'
-        option secret_mode 'dd'
-```
-
-### `files/telemt.init` WEB generator
-
-- [ ] Add WEB UCI parsing.
-- [ ] Validate enums, ports, FQDN, CIDR and user references.
-- [ ] Generate WEB listener only when `web.enabled=1`.
-- [ ] Generate:
-
-```toml
-[[server.listeners]]
-ip = "127.0.0.1"
-port = 27453
-transport = "web"
-proxy_protocol = false
-reuse_allow = false
-web_client_ip_source = "x_forwarded_for"
-web_trusted_proxy_cidrs = ["127.0.0.1/32"]
-```
-
-- [ ] Never inherit MTProxy-specific `client_mss`, `synlimit`, `announce`, `announce_ip` into the WEB listener.
-- [ ] Generate minimal `[web]` first:
-
-```toml
-[web]
-enabled = true
-carrier = "https"
-```
-
-- [ ] Rely on upstream defaults for new 3.5.6 knobs unless OpenWrt needs an explicit override.
-- [ ] Support `1..N` vhosts from the start.
-- [ ] Support `1..N` profiles from the start.
-- [ ] Support `http_upstream` decoy first.
-- [ ] Keep `plain` and `dd` WEB secret modes.
-- [ ] Reject `ee` for WEB.
+- [x] UCI sections `web`, `web_listener`, `web_vhost`, `web_profile`.
+- [x] Safe default: WEB disabled.
+- [x] Default private listener `127.0.0.1:27453`.
+- [x] `web_client_ip_source=x_forwarded_for`.
+- [x] `trusted_proxy_cidr`, `/0` запрещён.
+- [x] WEB listener генерируется отдельно с `transport="web"`, `proxy_protocol=false`, `reuse_allow=false`.
+- [x] Classic listener не загрязняется WEB-specific fields и наоборот.
+- [x] 1..N vhosts и 1..N profiles.
+- [x] `http_upstream` decoy.
+- [x] `plain` и `dd`; `ee` для WEB не допускается.
+- [x] VHost/profile/user references проверяются при generation.
+- [x] Disabled shared user удаляет его WEB profile из runtime generation.
+- [x] Structural WEB TOML находится до DYNAMIC marker.
+- [x] Read-only helper `/usr/libexec/telemt-web-check`.
 
 ### Shared Users invariant
 
-`config user` remains the only user entity.
+- [x] WEB profile хранит только ссылку на `config user`.
+- [x] Secret хранится один раз.
+- [x] Enabled state хранится один раз.
+- [x] Quota/expiration/TCP/IP limits остаются в общем user section.
+- [x] LuCI WEB links/QR собираются из shared user secret динамически.
 
-- [ ] Same user can use Classic.
-- [ ] Same user can use DD.
-- [ ] Same user can use FakeTLS.
-- [ ] Same user can be referenced by WEB profiles.
-- [ ] Secret stored once.
-- [ ] Quota stored once.
-- [ ] Expiration stored once.
-- [ ] Enabled state stored once.
-- [ ] Connection/IP limits stored once.
-- [ ] Disabled user is omitted from `[access.users]` and its WEB profiles are not generated.
-- [ ] No dangling WEB profile references.
+### Осталось на железе
 
-### Reload policy
-
-- [ ] Put all WEB structural TOML before `# --- DYNAMIC CONFIG ---`.
-- [ ] Therefore any WEB structural change follows the existing core-diff path and may hard restart Telemt.
-- [ ] Do not add a semantic lifecycle classifier.
-- [ ] Do not launch a second Telemt process for validation.
-- [ ] Do not use Telemt PATCH config API as persistent backend.
-
-### LAB-2 acceptance
-
-Minimum deployment:
-
-```text
-Telemt WEB: 127.0.0.1:27453
-carrier: https
-TLS frontend: external
-vhosts: 1+
-profiles: 1+
-users: existing shared users
-decoy: http_upstream
-```
-
-Test:
-
-- [ ] current stable Telegram Desktop.
-- [ ] `tg://webproxy`.
-- [ ] connect/reconnect.
-- [ ] text/media.
-- [ ] idle/resume.
-- [ ] Telemt restart.
-- [ ] user disable.
-- [ ] secret rotation.
-- [ ] quota.
-- [ ] expiration.
+- [ ] Stable Telegram Desktop acceptance.
+- [ ] `tg://webproxy` import/connect.
+- [ ] connect/reconnect, text/media, idle/resume.
+- [ ] restart/secret rotation/user disable/quota/expiration.
 
 ---
 
-## LAB-3 — HAProxy frontend
+## LAB-3 — HAProxy managed frontend
 
-Priority: before NGINX because users already ask for it.
+### Сделано
 
-Architecture:
+- [x] Отдельный helper `/usr/libexec/telemt-web-frontend`.
+- [x] Проверка SSL-capable HAProxy; `haproxy-nossl` не принимается.
+- [x] `status`, `render`, `check`, `apply`, `restore`.
+- [x] `haproxy -c` до установки/reload.
+- [x] Backup существующего `/etc/haproxy.cfg` до managed takeover.
+- [x] Rollback при failed activation.
+- [x] Backend `127.0.0.1:27453`.
+- [x] XFF overwrite через реальный source address.
+- [x] `retries 0`, no access-log path для carrier traffic.
+- [x] ALPN `h2,http/1.1`.
+- [x] Опциональный managed WAN TCP/443 firewall rule.
+- [x] ACME hotplug helper для managed HAProxy certificate refresh.
+- [x] LuCI controls `Check / Apply / Restore` через fixed action whitelist.
 
-```text
-Telegram
-   ↓ HTTPS/WSS :443
-HAProxy
-   ↓ HTTP/1.1 + X-Forwarded-For
-Telemt WEB 127.0.0.1:27453
-```
+### Осталось
 
-- [ ] Do not use PROXY protocol for WEB transport.
-- [ ] Keep `proxy_protocol=false` in the WEB listener.
-- [ ] Pass trusted `X-Forwarded-For`.
-- [ ] Trusted immediate proxy defaults to `127.0.0.1/32` for local frontend.
-- [ ] Keep classic MTProxy/PROXY-protocol support conceptually separate from WEB/XFF.
-
-### Frontend helper
-
-Preferred separate helper:
-
-```text
-/usr/libexec/telemt-web-frontend
-```
-
-- [ ] Keep HAProxy/NGINX config generation out of `generate_toml()`.
-- [ ] Detect installed HAProxy package/build.
-- [ ] Verify SSL support.
-- [ ] Detect running state.
-- [ ] Generate Telemt-specific frontend/backend config.
-- [ ] Never blindly overwrite a user's `/etc/haproxy.cfg`.
-- [ ] Support External/Existing mode first.
-- [ ] Add Managed mode only after verifying the actual OpenWrt HAProxy config model.
-- [ ] Use `haproxy -c` before reload/apply.
-- [ ] Reload only after successful validation.
+- [ ] Проверить на реальном OpenWrt с package `haproxy`.
+- [ ] Проверить конфликт TCP/443 с uhttpd/NGINX и recovery UX.
+- [ ] Проверить certificate rotation.
+- [ ] Проверить carrier-specific traffic после LAB-5.
 
 ---
 
-## LAB-4 — NGINX frontend
+## LAB-4 — NGINX managed frontend
 
-Architecture:
+### Сделано
+
+- [x] Проверен OpenWrt layout с include `/etc/nginx/conf.d/*.conf` внутри `http {}`.
+- [x] Отдельный helper `/usr/libexec/telemt-web-nginx`.
+- [x] Telemt владеет только `/etc/nginx/conf.d/telemt-web.conf`.
+- [x] `/etc/config/nginx` и основной NGINX config не перезаписываются.
+- [x] `status`, `render`, `check`, `apply`, `restore`.
+- [x] Config test до reload и rollback fragment/firewall.
+- [x] TLS 1.2/1.3.
+- [x] Public HTTP/2 path предусмотрен для lanes.
+- [x] HTTP/1.1 private hop к Telemt.
+- [x] WebSocket Upgrade headers сохранены.
+- [x] Host сохранён.
+- [x] X-Forwarded-For перезаписывается `$remote_addr`, а не доверяет входному XFF.
+- [x] `proxy_buffering off`.
+- [x] `proxy_next_upstream off`.
+- [x] carrier access logging отключён.
+- [x] LuCI NGINX fields + common fixed frontend action endpoint.
+- [x] Core package включает NGINX helper в IPK/APKv3.
+- [x] Uninstall пытается вернуть Telemt-owned NGINX fragment.
+- [x] Документация `docs/WEB_NGINX_MANAGED.ru.md`.
+- [x] Core Run #13 и LuCI Run #12 — SUCCESS.
+
+### Осталось
+
+- [ ] Реальный OpenWrt test `nginx-ssl`/`nginx-full`.
+- [ ] Проверка существующих `_lan`/user server blocks и TCP/443 collision.
+- [ ] Проверка cert/key reload и uninstall/restore.
+- [ ] Проверка `https-lanes` HTTP/2 и WebSocket carriers после LAB-5.
+
+---
+
+## LAB-5 — все WEB carriers — NEXT
+
+Upstream 3.5.6 поддерживает ровно:
 
 ```text
-Telegram
-   ↓ HTTPS/WSS :443
-NGINX
-   ↓ HTTP/1.1 + X-Forwarded-For
-Telemt WEB
+https
+https-lanes
+websocket
+websocket-lanes
 ```
 
-- [ ] Detect actual OpenWrt NGINX config layout.
-- [ ] Do not assume/hardcode an unverified `/etc/nginx/conf.d` layout.
-- [ ] Generate only a Telemt-owned include/fragment.
-- [ ] Never overwrite the user's primary NGINX configuration.
-- [ ] Support TLS 1.2/1.3.
-- [ ] Support public HTTP/2 for `https-lanes`.
-- [ ] Support HTTP/1.1 WebSocket Upgrade.
-- [ ] Preserve Host.
-- [ ] Set trusted X-Forwarded-For correctly.
-- [ ] Disable proxy buffering for carrier traffic.
-- [ ] Disable unsafe upstream retry.
-- [ ] Disable access logging for carrier credentials by default.
-- [ ] Use `nginx -t` before reload.
-- [ ] Reload only after successful validation.
+Upstream contract:
+
+- `web.carrier` — fixed carrier или финальный fallback при negotiation;
+- `web.carriers` — optional ordered candidate list, `false` либо непустой array;
+- `carrier_learning` — bounded process-local learning;
+- `carrier_negotiation_aggressiveness`: `conservative|balanced|aggressive`.
+
+### LAB-5A — fixed carriers, делать первым
+
+- [x] `https` уже работает как единственный разрешённый generator value.
+- [ ] Разрешить в `telemt.init`: `https-lanes`.
+- [ ] Разрешить в `telemt.init`: `websocket`.
+- [ ] Разрешить в `telemt.init`: `websocket-lanes`.
+- [ ] Расширить carrier dropdown в `telemt_web.lua` до четырёх enum.
+- [ ] Не менять shared Users/VHost/Profile schema.
+- [ ] Не включать auto-negotiation в тот же commit.
+- [ ] Добавить CI assertions на четыре exact tokens.
+- [ ] HAProxy: подтвердить `h2,http/1.1` contract.
+- [ ] NGINX: подтвердить HTTP/2 для lanes и Upgrade для WebSocket.
+
+### LAB-5B — auto negotiation отдельным commit
+
+Предлагаемая UCI модель:
+
+```uci
+config web 'web'
+        option carrier_policy 'fixed'   # fixed | auto
+        option carrier 'https'          # fixed or fallback
+        list carrier_candidate 'websocket-lanes'
+        list carrier_candidate 'websocket'
+        list carrier_candidate 'https-lanes'
+        option carrier_learning '1'
+        option carrier_negotiation_aggressiveness 'conservative'
+```
+
+- [ ] `fixed`: генерировать `carriers = false` либо не задавать поле.
+- [ ] `auto`: генерировать ordered non-empty `carriers=[...]`.
+- [ ] Fallback `carrier=https` по умолчанию.
+- [ ] Не дублировать fallback в candidate array без необходимости; upstream всё равно append-ит его один раз.
+- [ ] Learning default ON только для Auto UI preset.
+- [ ] Aggressiveness default `conservative`.
+- [ ] Manual/fixed carrier selection остаётся доступным.
+
+### LAB-5 hardware acceptance
+
+- [ ] `https`: connect/reconnect/media.
+- [ ] `https-lanes`: public HTTP/2 и минимум два simultaneous logical streams.
+- [ ] `websocket`: HTTP 101, binary relay, Ping/Pong, reconnect.
+- [ ] `websocket-lanes`: минимум два stream sockets; failure одной lane не убивает sibling/parent.
+- [ ] HAProxy для всех четырёх.
+- [ ] NGINX для всех четырёх.
+- [ ] External frontend reference config для всех четырёх.
+- [ ] Telegram Desktop stable, не beta как primary acceptance target.
 
 ---
 
-## LAB-5 — full WEB carrier support
+## LAB-6 — router resource profiles
 
-- [ ] `https`.
-- [ ] `https-lanes`.
-- [ ] `websocket`.
-- [ ] `websocket-lanes`.
-
-Carrier policy presets:
-
-- [ ] Compatibility = fixed `https`.
-- [ ] Auto = ordered carrier list + fallback `https` + learning.
-- [ ] Manual = explicit carrier selection.
-
-Auto defaults:
-
-- [ ] fallback `https`.
-- [ ] carrier learning on.
-- [ ] conservative negotiation aggressiveness.
-
----
-
-## LAB-6 — OpenWrt resource profiles
-
-Profiles:
+Профили:
 
 ```text
 low
@@ -376,215 +295,134 @@ high
 custom
 ```
 
-- [ ] Test 128 MiB class routers.
-- [ ] Test 256 MiB class routers.
-- [ ] Test 512 MiB+ routers.
-- [ ] Measure idle RSS.
-- [ ] Measure active WEB sessions.
-- [ ] Measure WebSocket/lane/media pressure.
-- [ ] Test overload/recovery.
-- [ ] Lock real numeric presets only after LAB measurements.
-- [ ] Do not expose the entire upstream WEB limit matrix in normal LuCI mode.
+- [ ] Снять реальные measurements на 128 MiB class.
+- [ ] 256 MiB class.
+- [ ] 512 MiB+ class.
+- [ ] idle RSS.
+- [ ] active sessions/streams.
+- [ ] HTTPS lanes pressure.
+- [ ] WebSocket/lane/media pressure.
+- [ ] overload/recovery.
+- [ ] Только после измерений зафиксировать численные presets.
+- [ ] Не показывать весь upstream limit matrix в обычном LuCI режиме.
 
 ---
 
 ## LAB-7 — LuCI WEB page
 
-Create a separate model/module rather than further inflating the existing large CBI:
+### Уже сделано
 
-```text
-usr/lib/lua/luci/model/cbi/telemt_web.lua
-```
+- [x] Отдельный `usr/lib/lua/luci/model/cbi/telemt_web.lua`.
+- [x] Menu entry `WEB Proxy`.
+- [x] WEB enable.
+- [x] Private listener.
+- [x] VHosts.
+- [x] Shared-user WEB profiles.
+- [x] DD/plain secret mode.
+- [x] Per-profile session/stream optional limits.
+- [x] Dynamic `tg://webproxy` links.
+- [x] Server-side QR endpoint с whitelist-by-construction.
+- [x] External / HAProxy / NGINX frontend selector.
+- [x] Managed frontend status/check/apply/restore.
+- [x] Actions используют только committed UCI state, а не несохранённые CBI values.
 
-WEB page:
+### Осталось
 
-- [ ] Status.
-- [ ] Enable.
-- [ ] Listener.
-- [ ] Public endpoint.
-- [ ] Carrier policy.
-- [ ] TLS frontend.
-- [ ] VHosts.
-- [ ] Profiles.
-- [ ] Decoy.
-- [ ] Resource profile.
-- [ ] Advanced.
-- [ ] Diagnostics.
-
-### Keep the existing Users page central
-
-- [ ] No separate WEB Users page.
-- [ ] Preserve existing secret/enabled/TCP/IP/quota/expiration/stats/CSV UX.
-- [ ] Add compact `WEB —` / `WEB N` indicator only.
-- [ ] Add WEB links to the existing user link UX.
-- [ ] Add WEB QR support.
-- [ ] Protect deletion when WEB profiles reference the user.
-
-Deletion UX:
-
-```text
-User is used by N WEB profiles.
-Delete user and WEB bindings?
-```
-
-One meaningful confirmation only.
-
-### Links / QR
-
-Generate WEB links dynamically from UCI:
-
-```text
-tg://webproxy?server=<host>&secret=<secret>
-tg://webproxy?server=<host>&secret=dd<secret>
-```
-
-- [ ] Do not store generated links in UCI.
-- [ ] Expand QR whitelist only to `tg://proxy?` and `tg://webproxy?`.
-- [ ] Do not allow arbitrary URL QR generation.
+- [ ] Все четыре carrier values + auto policy UI.
+- [ ] Resource profile UI после LAB-6.
+- [ ] Advanced 3.5.6 operational knobs после LAB-8.
+- [ ] Более полный runtime diagnostics после LAB-9.
+- [ ] В существующем Users page добавить компактный `WEB: — / N profiles` indicator.
+- [ ] Защитить удаление user, если на него ссылаются WEB profiles; одно meaningful confirmation удаляет user + bindings.
+- [ ] По возможности встроить WEB links в существующий Users link UX без раздувания таблицы.
 
 ---
 
-## LAB-8 — Telemt 3.5.6 operational controls
+## LAB-8 — 3.5.6 advanced controls
 
-Advanced only:
+После LAB-5/6:
 
-- [ ] overload action: `drop` / `wait` / `respond`.
-- [ ] default `drop`.
-- [ ] decoy fast-track: `off` / `shadow` / `enforce`.
-- [ ] default `off`.
-- [ ] bridge recovery timeout override.
-- [ ] optional per-profile session/stream limits.
-- [ ] never enable `decoy_fasttrack=enforce` automatically.
+- [ ] `http_connection_capacity_action`: `drop|wait|respond`, default `drop`.
+- [ ] `decoy_fasttrack_mode`: `off|shadow|enforce`, default `off`.
+- [ ] `bridge_recovery_secs`, upstream default 15.
+- [ ] `http_overload_timeout_ms`, upstream default 250.
+- [ ] `max_http_overload_connections`, upstream default 64.
+- [ ] Optional per-profile limits уже поддержаны backend/LuCI, проверить hardware semantics.
+- [ ] Никогда не включать `enforce` автоматически.
 
 ---
 
-## LAB-9 — WEB runtime status / diagnostics
+## LAB-9 — runtime status / diagnostics
 
 - [ ] lifecycle state.
 - [ ] generation/runtime instance.
 - [ ] sessions/streams.
-- [ ] carrier policy.
-- [ ] carrier learning.
-- [ ] capacity/overload counters.
-- [ ] recovery counters.
-- [ ] decoy state.
-- [ ] resource pressure.
-- [ ] aggregate useful Prometheus WEB metrics into a small number of operational cards.
+- [ ] current carrier / negotiation / learning.
+- [ ] overload/capacity.
+- [ ] recovery.
+- [ ] decoy.
+- [ ] pressure/resource counters.
+- [ ] Малое число полезных LuCI cards вместо полного dump Prometheus.
+- [ ] Опционально кнопки Pause/Drain/Resume через loopback API.
 
-Optional later controls:
-
-- [ ] Pause WEB.
-- [ ] Drain WEB.
-- [ ] Resume WEB.
-
-Do not insert automatic drain/pause into every Save & Apply.
+Не вставлять Pause/Drain автоматически в Save & Apply.
 
 ---
 
-## LAB-10 — final regression
+## LAB-10 — full regression / RC
 
-Verify concurrently on one installation:
+Совместно на одной установке:
 
 ```text
 Classic
 DD
 FakeTLS
-WEB HTTPS
-WEB HTTPS lanes
-WEB WebSocket
-WEB WebSocket lanes
+WEB https
+WEB https-lanes
+WEB websocket
+WEB websocket-lanes
 ```
 
-Test:
+- [ ] Shared user secrets работают во всех transports.
+- [ ] Secret rotation влияет на все transports ожидаемо.
+- [ ] Disable/expiration/quota работают ожидаемо.
+- [ ] API/metrics/ME/upstreams не регрессировали.
+- [ ] WEB backend `27453` не торчит в WAN.
+- [ ] API `9091` не открывается автоматически в WAN.
+- [ ] External frontend работает.
+- [ ] HAProxy работает.
+- [ ] NGINX работает.
+- [ ] 128/256/512+ MiB resource profiles не приводят к OOM.
+- [ ] OpenWrt 24.10 IPK verified on router.
+- [ ] OpenWrt 25.12 APKv3 verified on router.
+- [ ] LuCI package OpenWrt 25.12 packaging решён корректно.
+- [ ] Issue #17 закрыт после real upgrade verification.
+- [ ] Issue #19 закрыт только после functional LuCI WEB acceptance.
 
-- [ ] Users remain common.
-- [ ] secret rotation affects all transports correctly.
-- [ ] user disable affects all transports.
-- [ ] expiration/quota accounting behaves correctly with WEB.
-- [ ] API/metrics still work.
-- [ ] firewall remains correct.
-- [ ] no WAN exposure of WEB listener `27453`.
-- [ ] no automatic WAN exposure of API `9091`.
+## Не делать в first stable
 
----
+- собственный ACME client;
+- отдельную WEB user database;
+- duplicate secrets;
+- второй Telemt validator process;
+- semantic hot-reload classifier;
+- PATCH API как source of truth;
+- WAN exposure backend `27453`;
+- hard dependency одновременно на HAProxy и NGINX;
+- автоматическую установку обоих frontends;
+- полный rewrite старого LuCI;
+- `decoy_fasttrack=enforce` default.
 
-## RC criteria
-
-- [ ] Issue #17 fixed.
-- [ ] Issue #19 functionally satisfied.
-- [ ] Telemt 3.5.6 works with existing 3.4.x UCI.
-- [ ] shared Users confirmed.
-- [ ] External WEB frontend works.
-- [ ] HAProxy works.
-- [ ] NGINX works.
-- [ ] all four WEB carriers work.
-- [ ] WEB links + QR work.
-- [ ] router-safe resource profiles exist.
-- [ ] OpenWrt 24.10 IPK tested.
-- [ ] OpenWrt 25.12 APK tested.
-- [ ] `/etc/config/telemt` owned only by core package.
-
----
-
-## Out of scope for the first stable release
-
-- [ ] no own ACME client.
-- [ ] no separate WEB user database.
-- [ ] no duplicated WEB secrets.
-- [ ] no second Telemt daemon for validation.
-- [ ] no semantic hot-reload classifier.
-- [ ] no PATCH API as persistent source of truth.
-- [ ] no WAN exposure of `27453`.
-- [ ] no mandatory NGINX dependency.
-- [ ] no mandatory HAProxy dependency.
-- [ ] no automatic installation of both frontends.
-- [ ] no full rewrite of the existing LuCI app.
-
----
-
-## Suggested commit order
+## Ближайший порядок commits
 
 ```text
-01 luci: stop owning /etc/config/telemt
-02 core: bump build target to Telemt 3.5.6
-03 core: marker-first binary version detection
-04 core: 3.5.6 legacy regression fixes
-05 luci: 3.5.6 compatibility/version cleanup
+NEXT-1 core: allow all four fixed WEB carriers
+NEXT-2 luci: expose all four fixed WEB carriers
+NEXT-3 ci/docs: fixed carrier matrix + frontend requirements
+NEXT-4 core: add auto carrier candidate list + learning/aggressiveness
+NEXT-5 luci: add auto carrier policy controls
+NEXT-6 test: Telegram Desktop fixed/auto carrier matrix
 
-06 core: add WEB UCI schema
-07 core: generate WEB listener
-08 core: generate WEB vhosts/profiles
-09 core: shared-user integrity checks
-10 core: external WEB deployment
-
-11 core: HAProxy frontend helper
-12 luci: HAProxy frontend controls
-
-13 core: NGINX frontend helper
-14 luci: NGINX frontend controls
-
-15 core: all WEB carriers
-16 core: router resource profiles
-
-17 luci: separate WEB page
-18 luci: Users WEB integration
-19 luci: tg://webproxy links + QR
-20 luci: WEB status/diagnostics
-
-21 docs: WEB deployment + migration
-22 test: full regression matrix
-23 release: 3.5.x RC
-```
-
----
-
-## Architectural invariants
-
-```text
-UCI = only persistent source of truth
-TOML = generated runtime artifact
-Users = shared across all transports
-WEB = separate transport subsystem
-TLS frontend = External OR HAProxy OR NGINX
-Save & Apply = deterministic controlled apply/restart
+then:
+resource profiles -> advanced controls -> runtime diagnostics -> Users integration -> full regression -> RC
 ```
