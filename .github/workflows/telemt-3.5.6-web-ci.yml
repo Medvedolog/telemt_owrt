@@ -49,6 +49,28 @@ jobs:
           grep -q 'proxy_set_header X-Forwarded-For $remote_addr;' files/telemt-web-nginx
           grep -q 'proxy_next_upstream off;' files/telemt-web-nginx
 
+          # LAB-5A fixed carrier matrix: exact upstream enum, safe HTTPS fallback,
+          # and no auto-negotiation fields before LAB-5B.
+          grep -q 'https|https-lanes|websocket|websocket-lanes) ;;' files/telemt.init
+          grep -q 'web_carrier="https"' files/telemt.init
+          grep -q 'carrier = "$web_carrier"' files/telemt.init
+          if grep -qE '^[[:space:]]*(carriers|carrier_learning|carrier_negotiation_aggressiveness)[[:space:]]*=' files/telemt.init; then
+            echo 'ERROR: LAB-5A must not generate WEB auto-negotiation fields' >&2
+            exit 1
+          fi
+
+          # Frontend prerequisites for all four fixed carriers.
+          grep -q 'alpn h2,http/1.1' files/telemt-web-frontend
+          grep -q 'retries 0' files/telemt-web-frontend
+          grep -q 'http2 on;' files/telemt-web-nginx
+          grep -q 'proxy_http_version 1.1;' files/telemt-web-nginx
+          grep -q 'proxy_set_header Upgrade $http_upgrade;' files/telemt-web-nginx
+          grep -q 'proxy_set_header Connection $telemt_connection_upgrade;' files/telemt-web-nginx
+          if grep -q 'proxy_pass_request_headers off;' files/telemt-web-nginx; then
+            echo 'ERROR: NGINX must pass WEB carrier request headers to Telemt' >&2
+            exit 1
+          fi
+
           if grep -R -n -E "option port '18080'|port = 18080|127\.0\.0\.1:18080|127\.0\.0\.1:18081" \
             ROADMAP_3.5_WEB.md docs/WEB_EXTERNAL_FRONTEND.ru.md docs/WEB_HAPROXY_MANAGED.ru.md \
             files/telemt.config files/telemt.init files/telemt-web-check files/telemt-web-frontend files/telemt-web-nginx; then
