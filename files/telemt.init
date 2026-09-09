@@ -192,7 +192,7 @@ generate_toml() {
     web_carriers_toml=""
     web_carrier_seen="|"
     web_carrier_error=0
-    if [ "$web_carrier_policy" = "auto" ]; then
+    if [ "$web_enabled" -eq 1 ] && [ "$web_carrier_policy" = "auto" ]; then
         add_web_carrier_candidate() {
             local candidate="$1"
             case "$candidate" in
