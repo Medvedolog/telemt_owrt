@@ -164,7 +164,7 @@ jobs:
         run: |
           set -euxo pipefail
           dos2unix files/telemt.init files/telemt.config files/telemt-web-check \
-            files/telemt-web-frontend files/telemt-web-haproxy.hotplug
+            files/telemt-web-frontend files/telemt-web-nginx files/telemt-web-haproxy.hotplug
 
       - name: Generate maintainer scripts
         shell: bash
@@ -199,6 +199,7 @@ jobs:
           chmod 0755 /etc/init.d/telemt 2>/dev/null || true
           chmod 0755 /usr/libexec/telemt-web-check 2>/dev/null || true
           chmod 0755 /usr/libexec/telemt-web-frontend 2>/dev/null || true
+          chmod 0755 /usr/libexec/telemt-web-nginx 2>/dev/null || true
           chmod 0755 /etc/hotplug.d/acme/95-telemt-web-haproxy 2>/dev/null || true
           chmod 0644 /etc/config/telemt 2>/dev/null || true
 
@@ -217,6 +218,10 @@ jobs:
              [ -f /etc/haproxy.cfg.telemt-backup ] && \
              grep -qF '# TELEMT-MANAGED-HAPROXY v1' /etc/haproxy.cfg 2>/dev/null; then
               /usr/libexec/telemt-web-frontend restore 2>/dev/null || true
+          fi
+          if [ -x /usr/libexec/telemt-web-nginx ] && \
+             grep -qF '# TELEMT-MANAGED-NGINX v1' /etc/nginx/conf.d/telemt-web.conf 2>/dev/null; then
+              /usr/libexec/telemt-web-nginx restore 2>/dev/null || true
           fi
           /etc/init.d/telemt disable 2>/dev/null || true
           /etc/init.d/telemt stop 2>/dev/null || true
@@ -237,7 +242,7 @@ jobs:
           fi
           rm -f /tmp/etc/telemt.toml
           rm -f /tmp/telemt_stats.txt
-          rm -rf /tmp/telemt-web-haproxy.lock
+          rm -rf /tmp/telemt-web-haproxy.lock /tmp/telemt-web-nginx.lock
           if uci -q get firewall.telemt_web_https >/dev/null 2>&1; then
               uci -q delete firewall.telemt_web_https
               uci commit firewall 2>/dev/null || true
@@ -279,6 +284,9 @@ jobs:
               file_info: { mode: 0755, mtime: 2024-01-01T00:00:00Z }
             - src: ./files/telemt-web-frontend
               dst: /usr/libexec/telemt-web-frontend
+              file_info: { mode: 0755, mtime: 2024-01-01T00:00:00Z }
+            - src: ./files/telemt-web-nginx
+              dst: /usr/libexec/telemt-web-nginx
               file_info: { mode: 0755, mtime: 2024-01-01T00:00:00Z }
             - src: ./files/telemt-web-haproxy.hotplug
               dst: /etc/hotplug.d/acme/95-telemt-web-haproxy
@@ -322,6 +330,7 @@ jobs:
             install -m 0755 files/telemt.init "$ROOT/etc/init.d/telemt"
             install -m 0755 files/telemt-web-check "$ROOT/usr/libexec/telemt-web-check"
             install -m 0755 files/telemt-web-frontend "$ROOT/usr/libexec/telemt-web-frontend"
+            install -m 0755 files/telemt-web-nginx "$ROOT/usr/libexec/telemt-web-nginx"
             install -m 0755 files/telemt-web-haproxy.hotplug "$ROOT/etc/hotplug.d/acme/95-telemt-web-haproxy"
             install -m 0644 files/telemt.config "$ROOT/etc/config/telemt"
           done
