@@ -8,7 +8,7 @@
 Telegram Desktop
   -> HTTPS/WSS :443
   -> HAProxy (TLS termination)
-  -> HTTP/1.1 127.0.0.1:18080
+  -> HTTP/1.1 127.0.0.1:27453
   -> Telemt WEB listener
 ```
 
@@ -69,7 +69,7 @@ config web 'web'
 config web_listener 'web_listener'
         option enabled '1'
         option ip '127.0.0.1'
-        option port '18080'
+        option port '27453'
         option client_ip_source 'x_forwarded_for'
         list trusted_proxy_cidr '127.0.0.1/32'
 ```
@@ -162,7 +162,7 @@ backend telemt_web
     retries 0
     http-request del-header X-Forwarded-For
     http-request set-header X-Forwarded-For %[src]
-    server telemt_web_1 127.0.0.1:18080 check
+    server telemt_web_1 127.0.0.1:27453 check
 ```
 
 Принципы:
@@ -216,7 +216,7 @@ Managed helper **не останавливает uhttpd автоматическ
 firewall.telemt_web_https
 ```
 
-Порт Telemt `18080` в WAN firewall никогда не открывается.
+Порт Telemt `27453` в WAN firewall никогда не открывается.
 
 При `restore` правило удаляется.
 
@@ -228,14 +228,14 @@ firewall.telemt_web_https
 /etc/init.d/haproxy check
 logread -e haproxy
 logread -e telemt
-ss -lntp | grep -E ':443|:18080'
+ss -lntp | grep -E ':443|:27453'
 ```
 
 Ожидаемая схема:
 
 ```text
 HAProxy :443       LISTEN
-Telemt 127.0.0.1:18080 LISTEN
+Telemt 127.0.0.1:27453 LISTEN
 ```
 
 ## Acceptance для LAB-3
@@ -248,6 +248,6 @@ Telemt 127.0.0.1:18080 LISTEN
 - XFF содержит ровно client source IP;
 - `retries 0`;
 - HTTPS/WSS frontend предлагает ALPN `h2,http/1.1`;
-- WAN открыт только `:443`, не `:18080`;
+- WAN открыт только `:443`, не `:27453`;
 - ACME renewal пересобирает PEM и reload'ит HAProxy;
 - `restore` возвращает pre-Telemt HAProxy config.
