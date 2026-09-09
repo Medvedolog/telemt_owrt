@@ -89,15 +89,16 @@ validate_frontend_config() {
 }
 
 check_bind_conflict() {
-    local lines=''
+    local lines='' other=''
     if command -v ss >/dev/null 2>&1; then
         lines=$(ss -lntp 2>/dev/null | grep -E '(:|\])443[[:space:]]' || true)
     elif command -v netstat >/dev/null 2>&1; then
         lines=$(netstat -lntp 2>/dev/null | grep -E '(:|\])443[[:space:]]' || true)
     fi
     [ -z "$lines" ] && return 0
-    echo "$lines" | grep -qi haproxy && return 0
-    printf '%s\n' "$lines" >&2
+    other=$(printf '%s\n' "$lines" | grep -vi haproxy || true)
+    [ -z "$other" ] && return 0
+    printf '%s\n' "$other" >&2
     die 'TCP/443 is already occupied by a non-HAProxy listener; resolve uhttpd/NGINX/other conflict first'
 }
 
