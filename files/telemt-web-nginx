@@ -63,11 +63,13 @@ load_config() {
 }
 
 require_nginx_ssl() {
-    [ -x "$NGINX_BIN" ] || die "OpenWrt SSL-capable NGINX is not installed"
-    [ -x "$NGINX_UTIL" ] || die "nginx-util is missing; use the standard OpenWrt nginx-ssl/nginx-full package"
+    [ -x "$NGINX_BIN" ] || die 'OpenWrt SSL-capable NGINX is not installed'
+    [ -x "$NGINX_UTIL" ] || die 'nginx-util is missing; use the standard OpenWrt nginx-ssl/nginx-full package'
     [ -x "$NGINX_INIT" ] || die '/etc/init.d/nginx is missing'
     "$NGINX_BIN" -V 2>&1 | grep -q -- '--with-http_ssl_module' || \
         die 'installed NGINX has no HTTP SSL module'
+    "$NGINX_BIN" -V 2>&1 | grep -q -- '--with-http_v2_module' || \
+        die 'installed NGINX has no HTTP/2 module'
     if "$NGINX_BIN" -V 2>&1 | grep -q -- '--without-http_proxy_module'; then
         die 'installed NGINX has no HTTP proxy module'
     fi
@@ -137,6 +139,7 @@ EOF
         printf '    ssl_certificate %s;\n' "$nginx_cert"
         printf '    ssl_certificate_key %s;\n' "$nginx_key"
         cat <<'EOF'
+    http2 on;
     ssl_protocols TLSv1.2 TLSv1.3;
     access_log off;
     client_max_body_size 2m;
@@ -162,39 +165,50 @@ EOF
     chmod 600 "$out"
 }
 
-nginx_prepare_conf() {
-    eval "$("$NGINX_UTIL" get_env 2>/dev/null)" || return 1
-    [ -n "${UCI_CONF:-}" ] || UCI_CONF=/etc/nginx/uci.conf
-    [ -n "${NGINX_CONF:-}" ] || NGINX_CONF=/etc/nginx/nginx.conf
+# Test a candidate without ever placing it under /etc/nginx/conf.d/*.conf.
+# OpenWrt procd watches that glob, so a read-only check must not touch it.
+nginx_test_candidate() {
+    local candidate="$1" testconf out rc
+    testconf=$(mktemp /tmp/telemt-nginx-test.XXXXXX) || return 1
+    {
+        printf 'worker_processes 1;\n'
+        printf 'error_log stderr;\n'
+        printf 'pid %s.pid;\n' "$testconf"
+        printf 'events { worker_connections 64; }\n'
+        printf 'http { include %s; }\n' "$candidate"
+    } > "$testconf" || { rm -f "$testconf"; return 1; }
 
-    mkdir -p /var/log/nginx /var/lib/nginx /etc/nginx/conf.d || return 1
-    if [ -L "$UCI_CONF" ]; then
-        local target
-        target=$(readlink "$UCI_CONF" 2>/dev/null || true)
-        [ -z "$target" ] || rm -f "$target"
-    fi
-    "$NGINX_UTIL" init_lan >/dev/null 2>&1 || return 1
-
-    if [ -e "$UCI_CONF" ]; then
-        NGINX_ACTIVE_CONF="$UCI_CONF"
-    else
-        NGINX_ACTIVE_CONF="$NGINX_CONF"
-    fi
-    [ -f "$NGINX_ACTIVE_CONF" ] || [ -L "$NGINX_ACTIVE_CONF" ] || return 1
-}
-
-nginx_test_current() {
-    local require_marker="${1:-1}" out
-    nginx_prepare_conf || { printf 'ERROR: cannot prepare OpenWrt NGINX configuration\n' >&2; return 1; }
-    out=$("$NGINX_BIN" -T -c "$NGINX_ACTIVE_CONF" -g 'daemon off;' 2>&1) || {
+    out=$("$NGINX_BIN" -t -c "$testconf" -g 'daemon off;' 2>&1)
+    rc=$?
+    rm -f "$testconf" "$testconf.pid"
+    if [ "$rc" -ne 0 ]; then
         printf '%s\n' "$out" >&2
-        return 1
-    }
-    if [ "$require_marker" -eq 1 ] && ! printf '%s\n' "$out" | grep -qF "$MARKER"; then
-        printf 'ERROR: %s is not included by the active OpenWrt NGINX configuration\n' "$FRAGMENT" >&2
         return 1
     fi
     return 0
+}
+
+get_active_nginx_conf() {
+    eval "$("$NGINX_UTIL" get_env 2>/dev/null)" || return 1
+    [ -n "${UCI_CONF:-}" ] || UCI_CONF=/etc/nginx/uci.conf
+    [ -n "${NGINX_CONF:-}" ] || NGINX_CONF=/etc/nginx/nginx.conf
+    if [ -e "$UCI_CONF" ]; then
+        printf '%s\n' "$UCI_CONF"
+    elif [ -e "$NGINX_CONF" ]; then
+        printf '%s\n' "$NGINX_CONF"
+    else
+        return 1
+    fi
+}
+
+nginx_marker_active() {
+    local conf out
+    conf=$(get_active_nginx_conf) || return 1
+    out=$("$NGINX_BIN" -T -c "$conf" -g 'daemon off;' 2>&1) || {
+        printf '%s\n' "$out" >&2
+        return 1
+    }
+    printf '%s\n' "$out" | grep -qF "$MARKER"
 }
 
 install_firewall_rule() {
@@ -265,20 +279,15 @@ cmd_check() {
     check_bind_conflict
     acquire_lock
 
-    local old new had_old=0 rc=0
-    old=$(mktemp /tmp/telemt-nginx-old.XXXXXX) || die 'mktemp failed'
-    new=$(mktemp /etc/nginx/conf.d/.telemt-web.XXXXXX) || { rm -f "$old"; die 'mktemp failed'; }
-    if [ -f "$FRAGMENT" ]; then
-        cp -p "$FRAGMENT" "$old" || { rm -f "$old" "$new"; die 'cannot stage current fragment'; }
-        had_old=1
+    local candidate
+    candidate=$(mktemp /tmp/telemt-nginx-candidate.XXXXXX) || die 'mktemp failed'
+    render_cfg "$candidate" || { rm -f "$candidate"; die 'render failed'; }
+    if ! nginx_test_candidate "$candidate"; then
+        rm -f "$candidate"
+        die 'NGINX rejected the generated Telemt fragment'
     fi
-    render_cfg "$new" || { rm -f "$old" "$new"; die 'render failed'; }
-    mv -f "$new" "$FRAGMENT" || { rm -f "$old" "$new"; die 'cannot stage candidate fragment'; }
-    nginx_test_current 1 || rc=1
-    restore_previous_fragment "$had_old" "$old" || rc=1
-    rm -f "$old"
-    [ "$rc" -eq 0 ] || die 'NGINX rejected the generated Telemt fragment'
-    log 'OK: generated NGINX configuration is valid and included by OpenWrt'
+    rm -f "$candidate"
+    log 'OK: generated NGINX configuration is valid; no live NGINX file was changed'
 }
 
 cmd_apply() {
@@ -291,7 +300,13 @@ cmd_apply() {
 
     local old new had_old=0
     old=$(mktemp /tmp/telemt-nginx-rollback.XXXXXX) || die 'mktemp failed'
-    new=$(mktemp /etc/nginx/conf.d/.telemt-web.XXXXXX) || { rm -f "$old"; die 'mktemp failed'; }
+    new=$(mktemp /tmp/telemt-nginx-candidate.XXXXXX) || { rm -f "$old"; die 'mktemp failed'; }
+
+    render_cfg "$new" || { rm -f "$old" "$new"; die 'render failed'; }
+    if ! nginx_test_candidate "$new"; then
+        rm -f "$old" "$new"
+        die 'NGINX rejected generated configuration before installation'
+    fi
 
     if [ -f "$FRAGMENT" ]; then
         cp -p "$FRAGMENT" "$old" || { rm -f "$old" "$new"; die 'cannot create rollback copy'; }
@@ -303,25 +318,22 @@ cmd_apply() {
         fi
     fi
 
-    render_cfg "$new" || { rm -f "$old" "$new"; die 'render failed'; }
+    mkdir -p /etc/nginx/conf.d || { rm -f "$old" "$new"; die 'cannot create NGINX conf.d directory'; }
     mv -f "$new" "$FRAGMENT" || { rm -f "$old" "$new"; die 'cannot install candidate fragment'; }
-    if ! nginx_test_current 1; then
-        restore_previous_fragment "$had_old" "$old" >/dev/null 2>&1 || true
-        rm -f "$old"
-        die 'NGINX rejected generated configuration; previous fragment restored'
-    fi
+    chmod 600 "$FRAGMENT" 2>/dev/null || true
 
-    if ! install_firewall_rule || ! reload_nginx; then
+    if ! install_firewall_rule || ! reload_nginx || ! nginx_marker_active; then
         log 'Managed NGINX activation failed; rolling back' >&2
         remove_firewall_rule >/dev/null 2>&1 || true
         restore_previous_fragment "$had_old" "$old" >/dev/null 2>&1 || true
-        nginx_test_current 0 >/dev/null 2>&1 && reload_nginx >/dev/null 2>&1 || true
+        if pidof nginx >/dev/null 2>&1; then "$NGINX_INIT" reload >/dev/null 2>&1 || true; fi
         rm -f "$old"
         die 'NGINX apply failed and previous fragment was restored where possible'
     fi
 
     rm -f "$old"
     log "OK: managed NGINX active on ${nginx_bind} -> ${web_ip}:${web_port}"
+    log 'OK: HTTP/2 is enabled for https-lanes compatibility'
     [ "$nginx_ipv6" -eq 1 ] && log 'OK: managed NGINX also listens on [::]:443'
     [ "$nginx_auto_fw" -eq 1 ] && log 'OK: managed WAN TCP/443 firewall rule is active'
 }
@@ -330,7 +342,8 @@ cmd_restore() {
     require_nginx_ssl
     acquire_lock
 
-    local old had_old=0 changed=0
+    local old had_old=0 changed=0 used_backup=0 was_running=0
+    pidof nginx >/dev/null 2>&1 && was_running=1
     old=$(mktemp /tmp/telemt-nginx-restore-rollback.XXXXXX) || die 'mktemp failed'
     if [ -f "$FRAGMENT" ]; then
         cp -p "$FRAGMENT" "$old" || { rm -f "$old"; die 'cannot create rollback copy'; }
@@ -340,6 +353,7 @@ cmd_restore() {
     if [ -f "$FRAGMENT_BACKUP" ]; then
         cp -p "$FRAGMENT_BACKUP" "$FRAGMENT" || { rm -f "$old"; die 'cannot restore saved fragment'; }
         changed=1
+        used_backup=1
     elif grep -qF "$MARKER" "$FRAGMENT" 2>/dev/null; then
         rm -f "$FRAGMENT"
         changed=1
@@ -348,21 +362,25 @@ cmd_restore() {
         die 'no Telemt-managed NGINX fragment or saved pre-Telemt fragment found'
     fi
 
-    if ! nginx_test_current 0; then
+    if ! remove_firewall_rule; then
         restore_previous_fragment "$had_old" "$old" >/dev/null 2>&1 || true
         rm -f "$old"
-        die 'restored NGINX state is invalid; current fragment put back'
+        die 'failed to remove Telemt NGINX firewall rule; previous fragment restored'
     fi
 
-    if ! remove_firewall_rule || ! reload_nginx; then
-        restore_previous_fragment "$had_old" "$old" >/dev/null 2>&1 || true
-        nginx_test_current 0 >/dev/null 2>&1 && reload_nginx >/dev/null 2>&1 || true
-        rm -f "$old"
-        die 'NGINX restore failed; previous state put back where possible'
+    if [ "$was_running" -eq 1 ]; then
+        if ! "$NGINX_INIT" reload >/dev/null 2>&1; then
+            restore_previous_fragment "$had_old" "$old" >/dev/null 2>&1 || true
+            "$NGINX_INIT" reload >/dev/null 2>&1 || true
+            rm -f "$old"
+            die 'NGINX restore failed; previous state put back where possible'
+        fi
     fi
 
+    [ "$used_backup" -eq 1 ] && rm -f "$FRAGMENT_BACKUP"
     rm -f "$old"
     [ "$changed" -eq 1 ] && log 'OK: Telemt managed NGINX frontend was restored/removed'
+    [ "$was_running" -eq 0 ] && log 'OK: NGINX was stopped and was left stopped'
 }
 
 cmd_status() {
@@ -384,6 +402,11 @@ cmd_status() {
     fi
     [ -f "$FRAGMENT_BACKUP" ] && printf '  backup: present\n' || printf '  backup: absent\n'
     pidof nginx >/dev/null 2>&1 && printf '  process: running\n' || printf '  process: stopped\n'
+    if pidof nginx >/dev/null 2>&1 && nginx_marker_active >/dev/null 2>&1; then
+        printf '  fragment_loaded: yes\n'
+    else
+        printf '  fragment_loaded: no\n'
+    fi
 }
 
 usage() {
@@ -391,7 +414,7 @@ usage() {
 Usage: telemt-web-nginx <status|render|check|apply|restore>
   status   Show UCI, fragment and process state.
   render   Print the candidate managed NGINX fragment without installing it.
-  check    Temporarily stage the fragment and validate it with the active OpenWrt NGINX config.
+  check    Validate an isolated candidate; never changes live NGINX files.
   apply    Install the owned fragment, open WAN TCP/443 if enabled, and reload/start NGINX.
   restore  Restore a pre-existing fragment or remove the Telemt-managed fragment.
 EOF
