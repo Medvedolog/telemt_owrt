@@ -181,7 +181,7 @@ generate_toml() {
 
     config_get_bool web_listener_enabled web_listener enabled 1
     config_get web_ip web_listener ip "127.0.0.1"
-    config_get web_port web_listener port "18080"
+    config_get web_port web_listener port "27453"
     config_get web_client_ip_source web_listener client_ip_source "x_forwarded_for"
     web_runtime_enabled=0
 
