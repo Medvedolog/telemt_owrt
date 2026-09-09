@@ -172,9 +172,9 @@ generate_toml() {
     config_get_bool web_enabled web enabled 0
     config_get web_carrier web carrier "https"
     case "$web_carrier" in
-        https) ;;
+        https|https-lanes|websocket|websocket-lanes) ;;
         *)
-            logger -t telemt "Init: WEB carrier '$web_carrier' not enabled in this LAB; using https"
+            logger -t telemt "Init: invalid WEB carrier '$web_carrier'; using https"
             web_carrier="https"
             ;;
     esac
