@@ -1,17 +1,19 @@
 #!/bin/sh
-# Telemt WEB external-frontend status helper.
-# Read-only by design: reads UCI/runtime state, never writes config and never
-# starts a second Telemt process.
+# Telemt WEB status helper.
+# Read-only by design: reads UCI/runtime/frontend state, never writes config and
+# never starts a second Telemt process.
 
 . /lib/functions.sh
 
 CONF="/tmp/etc/telemt.toml"
+HAPROXY_MARKER='# TELEMT-MANAGED-HAPROXY v1'
 
 config_load telemt
 
 config_get_bool web_enabled web enabled 0
 config_get web_frontend web tls_terminator "external"
 config_get web_carrier web carrier "https"
+config_get_bool haproxy_managed web haproxy_managed 0
 config_get_bool web_listener_enabled web_listener enabled 1
 config_get web_ip web_listener ip "127.0.0.1"
 config_get web_port web_listener port "18080"
@@ -88,9 +90,33 @@ if [ "$web_enabled" -ne 1 ]; then
 fi
 
 status=0
-if [ "$web_frontend" != "external" ]; then
-    echo "  warning: managed '${web_frontend}' frontend is not implemented in this LAB; configure it externally"
-fi
+case "$web_frontend" in
+    external)
+        ;;
+    haproxy)
+        if [ "$haproxy_managed" -eq 1 ]; then
+            if [ ! -f /etc/haproxy.cfg ] || ! grep -qF "$HAPROXY_MARKER" /etc/haproxy.cfg 2>/dev/null; then
+                echo "  error: managed HAProxy selected but /etc/haproxy.cfg is not Telemt-managed"
+                status=1
+            elif ! pidof haproxy >/dev/null 2>&1; then
+                echo "  error: managed HAProxy config is installed but HAProxy is not running"
+                status=1
+            else
+                echo "  haproxy_frontend: managed/running"
+            fi
+        else
+            echo "  warning: HAProxy selected in external mode; Telemt does not modify /etc/haproxy.cfg"
+        fi
+        ;;
+    nginx)
+        echo "  warning: managed NGINX frontend is not implemented yet; configure NGINX externally"
+        ;;
+    *)
+        echo "  error: unknown tls_frontend '${web_frontend}'"
+        status=1
+        ;;
+esac
+
 if [ "$web_listener_enabled" -ne 1 ]; then
     echo "  error: WEB is enabled but backend listener is disabled"
     status=1
