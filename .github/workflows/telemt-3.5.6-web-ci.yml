@@ -50,10 +50,19 @@ jobs:
           fi
 
           RELEASE_WF=.github/workflows/telemt-release-aarch64-upx.yml
-          test "$(grep -c 'dst: /usr/libexec/telemt-web-check' "$RELEASE_WF")" -eq 4
-          test "$(grep -c 'dst: /usr/libexec/telemt-web-frontend' "$RELEASE_WF")" -eq 4
-          test "$(grep -c 'dst: /etc/hotplug.d/acme/95-telemt-web-haproxy' "$RELEASE_WF")" -eq 4
-          test "$(grep -c 'dst: /etc/config/telemt' "$RELEASE_WF")" -eq 4
+          grep -q 'uses: owfeed/owfeed/setup@v0.5.1' "$RELEASE_WF"
+          grep -q "OPENWRT_APK_SDK_RELEASE: '25.12.2'" "$RELEASE_WF"
+          grep -q 'owfeed --config owfeed-release.yml build --release 25.12' "$RELEASE_WF"
+          grep -q 'test "$MAGIC" = 414442' "$RELEASE_WF"
+          grep -q 'conffiles: \["/etc/config/telemt"\]' "$RELEASE_WF"
+          grep -q 'dst: /usr/libexec/telemt-web-check' "$RELEASE_WF"
+          grep -q 'dst: /usr/libexec/telemt-web-frontend' "$RELEASE_WF"
+          grep -q 'dst: /etc/hotplug.d/acme/95-telemt-web-haproxy' "$RELEASE_WF"
+          grep -q 'dst: /etc/config/telemt' "$RELEASE_WF"
+          if grep -q -- '--packager apk' "$RELEASE_WF"; then
+            echo 'ERROR: release workflow still uses nFPM Alpine APKv2 packaging' >&2
+            exit 1
+          fi
 
       - name: Checkout upstream Telemt 3.5.6
         uses: actions/checkout@v4
