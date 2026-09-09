@@ -1,0 +1,28 @@
+#!/bin/sh
+# Refresh Telemt managed HAProxy certificate bundle after OpenWrt ACME events.
+
+case "${ACTION:-}" in
+    issued|renewed) ;;
+    *) exit 0 ;;
+esac
+
+. /lib/functions.sh
+config_load telemt
+
+config_get_bool web_enabled web enabled 0
+config_get tls_terminator web tls_terminator external
+config_get_bool haproxy_managed web haproxy_managed 0
+
+[ "$web_enabled" -eq 1 ] || exit 0
+[ "$tls_terminator" = 'haproxy' ] || exit 0
+[ "$haproxy_managed" -eq 1 ] || exit 0
+[ -x /usr/libexec/telemt-web-frontend ] || exit 0
+
+if /usr/libexec/telemt-web-frontend apply >/tmp/telemt-web-haproxy-acme.log 2>&1; then
+    logger -t telemt "WEB HAProxy refreshed after ACME ${ACTION}"
+    rm -f /tmp/telemt-web-haproxy-acme.log
+else
+    logger -t telemt "WEB HAProxy ACME ${ACTION} refresh failed; see /tmp/telemt-web-haproxy-acme.log"
+fi
+
+exit 0
