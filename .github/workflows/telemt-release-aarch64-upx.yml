@@ -182,7 +182,7 @@ jobs:
         run: |
           set -euxo pipefail
 
-          dos2unix files/telemt.init files/telemt.config
+          dos2unix files/telemt.init files/telemt.config files/telemt-web-check
 
       - name: Generate maintainer scripts
         shell: bash
@@ -215,6 +215,7 @@ jobs:
 
           chmod 0755 /usr/bin/telemt 2>/dev/null || true
           chmod 0755 /etc/init.d/telemt 2>/dev/null || true
+          chmod 0755 /usr/libexec/telemt-web-check 2>/dev/null || true
           chmod 0644 /etc/config/telemt 2>/dev/null || true
 
           /etc/init.d/telemt enable 2>/dev/null || true
@@ -277,6 +278,11 @@ jobs:
               file_info:
                 mode: 0755
                 mtime: 2024-01-01T00:00:00Z
+            - src: ./files/telemt-web-check
+              dst: /usr/libexec/telemt-web-check
+              file_info:
+                mode: 0755
+                mtime: 2024-01-01T00:00:00Z
             - src: ./files/telemt.config
               dst: /etc/config/telemt
               type: config
@@ -314,6 +320,11 @@ jobs:
                 mtime: 2024-01-01T00:00:00Z
             - src: ./files/telemt.init
               dst: /etc/init.d/telemt
+              file_info:
+                mode: 0755
+                mtime: 2024-01-01T00:00:00Z
+            - src: ./files/telemt-web-check
+              dst: /usr/libexec/telemt-web-check
               file_info:
                 mode: 0755
                 mtime: 2024-01-01T00:00:00Z
@@ -358,6 +369,10 @@ jobs:
               dst: /etc/init.d/telemt
               file_info:
                 mode: 0755
+            - src: ./files/telemt-web-check
+              dst: /usr/libexec/telemt-web-check
+              file_info:
+                mode: 0755
             - src: ./files/telemt.config
               dst: /etc/config/telemt
               type: config
@@ -391,6 +406,10 @@ jobs:
                 mode: 0755
             - src: ./files/telemt.init
               dst: /etc/init.d/telemt
+              file_info:
+                mode: 0755
+            - src: ./files/telemt-web-check
+              dst: /usr/libexec/telemt-web-check
               file_info:
                 mode: 0755
             - src: ./files/telemt.config
