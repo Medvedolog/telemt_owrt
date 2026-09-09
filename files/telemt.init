@@ -143,6 +143,9 @@ generate_toml() {
     local metrics_listen_addr api_listen_addr
     # 3.4.18 additions
     local client_mss mask_dynamic
+    # 3.5.6 WEB core (vhosts/profiles are added by the next LAB patch)
+    local web_enabled web_listener_enabled web_ip web_port web_client_ip_source web_carrier
+    local web_trusted_toml
 
     config_get mode general mode "tls"
     config_get port general port "8443"
@@ -160,6 +163,66 @@ generate_toml() {
     if [ "$port" -eq "$api_port" ] || [ "$port" -eq "$metrics_port" ]; then
         logger -t telemt "Init: CRITICAL ERROR! Proxy port conflicts with API/Metrics."
         cleanup_tmp; return 1
+    fi
+
+    # --- Telemt 3.5.6 WEB core ---
+    config_get_bool web_enabled web enabled 0
+    config_get web_carrier web carrier "https"
+    case "$web_carrier" in
+        https) ;;
+        *)
+            logger -t telemt "Init: WEB carrier '$web_carrier' not enabled in this LAB; using https"
+            web_carrier="https"
+            ;;
+    esac
+
+    config_get_bool web_listener_enabled web_listener enabled 1
+    config_get web_ip web_listener ip "127.0.0.1"
+    config_get web_port web_listener port "18080"
+    config_get web_client_ip_source web_listener client_ip_source "x_forwarded_for"
+
+    if [ "$web_enabled" -eq 1 ]; then
+        if [ "$web_listener_enabled" -ne 1 ]; then
+            logger -t telemt "Init: WEB is enabled but web_listener is disabled"
+            cleanup_tmp; return 1
+        fi
+        if ! is_uint "$web_port" || [ "$web_port" -lt 1 ] || [ "$web_port" -gt 65535 ]; then
+            logger -t telemt "Init: invalid WEB listener port '$web_port'"
+            cleanup_tmp; return 1
+        fi
+        if [ "$web_port" -eq "$port" ] || [ "$web_port" -eq "$api_port" ] || [ "$web_port" -eq "$metrics_port" ]; then
+            logger -t telemt "Init: WEB listener port conflicts with proxy/API/metrics port"
+            cleanup_tmp; return 1
+        fi
+        case "$web_ip" in
+            ""|*[!0-9A-Fa-f:.]*)
+                logger -t telemt "Init: invalid WEB listener IP '$web_ip'"
+                cleanup_tmp; return 1
+                ;;
+        esac
+        [ "$web_client_ip_source" = "x_forwarded_for" ] || web_client_ip_source="x_forwarded_for"
+
+        web_trusted_toml=""
+        add_web_trusted_proxy() {
+            local cidr="$1"
+            if ! is_cidr "$cidr"; then
+                logger -t telemt "Init: ignoring invalid WEB trusted proxy CIDR '$cidr'"
+                return 0
+            fi
+            case "$cidr" in
+                */0)
+                    logger -t telemt "Init: ignoring forbidden WEB trusted proxy CIDR '$cidr'"
+                    return 0
+                    ;;
+            esac
+            [ -n "$web_trusted_toml" ] && web_trusted_toml="${web_trusted_toml}, "
+            web_trusted_toml="${web_trusted_toml}\"$(sanitize_toml_value "$cidr")\""
+        }
+        config_list_foreach web_listener trusted_proxy_cidr add_web_trusted_proxy
+        if [ -z "$web_trusted_toml" ]; then
+            web_trusted_toml='"127.0.0.1/32"'
+            logger -t telemt "Init: WEB trusted proxy list empty; falling back to 127.0.0.1/32"
+        fi
     fi
 
     config_get_bool ext_rt general extended_runtime_enabled 1
@@ -438,6 +501,27 @@ TOML
         echo "[[server.listeners]]" >> "$TMP_CONF"
         echo "ip = \"::\"" >> "$TMP_CONF"
         if [ -n "$announce_ip" ]; then echo "announce = \"$announce_ip\"" >> "$TMP_CONF"; fi
+    fi
+
+    # WEB is a separate application transport behind a trusted TLS terminator.
+    # Keep all WEB structure before the DYNAMIC marker so current reload logic
+    # treats WEB changes as restart-sensitive CORE changes.
+    if [ "$web_enabled" -eq 1 ]; then
+        cat <<TOML >> "$TMP_CONF"
+
+[[server.listeners]]
+ip = "$(sanitize_toml_value "$web_ip")"
+port = $web_port
+transport = "web"
+proxy_protocol = false
+reuse_allow = false
+web_client_ip_source = "$web_client_ip_source"
+web_trusted_proxy_cidrs = [$web_trusted_toml]
+
+[web]
+enabled = true
+carrier = "$web_carrier"
+TOML
     fi
 
     cat <<TOML >> "$TMP_CONF"
