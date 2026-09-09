@@ -146,6 +146,7 @@ generate_toml() {
     local client_mss mask_dynamic
     # 3.5.6 WEB core + vhosts/profiles
     local web_enabled web_runtime_enabled web_listener_enabled web_ip web_port web_client_ip_source web_carrier
+    local web_carrier_policy web_carriers_toml web_carrier_learning web_carrier_negotiation_aggressiveness web_carrier_seen web_carrier_error
     local web_trusted_toml web_vhost_count web_active_vhost_count web_generation_error
     local web_seen_vhosts web_seen_hosts web_current_vhost web_vhost_tmp
     local web_profiles_configured web_profiles_active
@@ -178,6 +179,59 @@ generate_toml() {
             web_carrier="https"
             ;;
     esac
+
+    config_get web_carrier_policy web carrier_policy "fixed"
+    case "$web_carrier_policy" in
+        fixed|auto) ;;
+        *)
+            logger -t telemt "Init: invalid WEB carrier_policy '$web_carrier_policy'; using fixed"
+            web_carrier_policy="fixed"
+            ;;
+    esac
+
+    web_carriers_toml=""
+    web_carrier_seen="|"
+    web_carrier_error=0
+    if [ "$web_carrier_policy" = "auto" ]; then
+        add_web_carrier_candidate() {
+            local candidate="$1"
+            case "$candidate" in
+                https|https-lanes|websocket|websocket-lanes) ;;
+                *)
+                    logger -t telemt "Init: invalid WEB auto carrier candidate '$candidate'"
+                    web_carrier_error=1
+                    return 0
+                    ;;
+            esac
+            case "$web_carrier_seen" in
+                *"|$candidate|"*)
+                    logger -t telemt "Init: duplicate WEB auto carrier candidate '$candidate'"
+                    web_carrier_error=1
+                    return 0
+                    ;;
+            esac
+            web_carrier_seen="${web_carrier_seen}${candidate}|"
+            [ -n "$web_carriers_toml" ] && web_carriers_toml="${web_carriers_toml}, "
+            web_carriers_toml="${web_carriers_toml}\"${candidate}\""
+        }
+        config_list_foreach web carrier_candidate add_web_carrier_candidate
+        if [ "$web_carrier_error" -ne 0 ]; then
+            cleanup_tmp; return 1
+        fi
+        if [ -z "$web_carriers_toml" ]; then
+            logger -t telemt "Init: WEB auto carrier policy requires at least one carrier_candidate"
+            cleanup_tmp; return 1
+        fi
+        config_get_bool web_carrier_learning web carrier_learning 1
+        config_get web_carrier_negotiation_aggressiveness web carrier_negotiation_aggressiveness "conservative"
+        case "$web_carrier_negotiation_aggressiveness" in
+            conservative|balanced|aggressive) ;;
+            *)
+                logger -t telemt "Init: invalid WEB carrier negotiation aggressiveness '$web_carrier_negotiation_aggressiveness'; using conservative"
+                web_carrier_negotiation_aggressiveness="conservative"
+                ;;
+        esac
+    fi
 
     config_get_bool web_listener_enabled web_listener enabled 1
     config_get web_ip web_listener ip "127.0.0.1"
@@ -716,6 +770,11 @@ web_trusted_proxy_cidrs = [$web_trusted_toml]
 enabled = true
 carrier = "$web_carrier"
 TOML
+        if [ "$web_carrier_policy" = "auto" ]; then
+            echo "carriers = [$web_carriers_toml]" >> "$TMP_CONF"
+            [ "$web_carrier_learning" -eq 1 ] && echo "carrier_learning = true" >> "$TMP_CONF" || echo "carrier_learning = false" >> "$TMP_CONF"
+            echo "carrier_negotiation_aggressiveness = \"$web_carrier_negotiation_aggressiveness\"" >> "$TMP_CONF"
+        fi
         cat "$TMP_WEB" >> "$TMP_CONF"
     fi
 
@@ -839,7 +898,7 @@ TOML
         [ -n "$u_scopes" ] && echo "scopes = \"$(sanitize_toml_value "$u_scopes")\"" >> "$TMP_CONF"
 
         if [ "$u_type" = "shadowsocks" ]; then
-            # Shadowsocks: url field (SIP002), no username/password
+            # Shadowsocks: url field (SIP002 format), no username/password
             echo "url = \"$(sanitize_toml_value "$u_url")\"" >> "$TMP_CONF"
             [ -n "$u_interface" ] && echo "interface = \"$(sanitize_toml_value "$u_interface")\"" >> "$TMP_CONF"
         elif [ "$u_type" != "direct" ]; then
