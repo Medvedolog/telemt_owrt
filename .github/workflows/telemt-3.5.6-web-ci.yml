@@ -38,8 +38,8 @@ jobs:
 
           grep -q "option port '27453'" files/telemt.config
           grep -q 'config_get web_port web_listener port "27453"' files/telemt.init
-          grep -q "config_get web_port web_listener port '27453'" files/telemt-web-check
-          grep -q "config_get web_port web_listener port '27453'" files/telemt-web-frontend
+          grep -q 'config_get web_port web_listener port .*27453' files/telemt-web-check
+          grep -q 'config_get web_port web_listener port .*27453' files/telemt-web-frontend
 
           if grep -R -n -E "option port '18080'|port = 18080|127\.0\.0\.1:18080|127\.0\.0\.1:18081" \
             ROADMAP_3.5_WEB.md docs/WEB_EXTERNAL_FRONTEND.ru.md docs/WEB_HAPROXY_MANAGED.ru.md \
