@@ -182,7 +182,8 @@ jobs:
         run: |
           set -euxo pipefail
 
-          dos2unix files/telemt.init files/telemt.config files/telemt-web-check
+          dos2unix files/telemt.init files/telemt.config files/telemt-web-check \
+            files/telemt-web-frontend files/telemt-web-haproxy.hotplug
 
       - name: Generate maintainer scripts
         shell: bash
@@ -216,6 +217,8 @@ jobs:
           chmod 0755 /usr/bin/telemt 2>/dev/null || true
           chmod 0755 /etc/init.d/telemt 2>/dev/null || true
           chmod 0755 /usr/libexec/telemt-web-check 2>/dev/null || true
+          chmod 0755 /usr/libexec/telemt-web-frontend 2>/dev/null || true
+          chmod 0755 /etc/hotplug.d/acme/95-telemt-web-haproxy 2>/dev/null || true
           chmod 0644 /etc/config/telemt 2>/dev/null || true
 
           /etc/init.d/telemt enable 2>/dev/null || true
@@ -243,8 +246,15 @@ jobs:
           echo "================================================================="
           rm -f /var/etc/telemt.toml
           rm -f /var/etc/telemt.version
+          rm -f /var/etc/telemt-haproxy.pem
           rm -f /tmp/etc/telemt.toml
           rm -f /tmp/telemt_stats.txt
+          rm -rf /tmp/telemt-web-haproxy.lock
+          if uci -q get firewall.telemt_web_https >/dev/null 2>&1; then
+              uci -q delete firewall.telemt_web_https
+              uci commit firewall 2>/dev/null || true
+              /etc/init.d/firewall reload 2>/dev/null || true
+          fi
           exit 0
           EOF
 
@@ -280,6 +290,16 @@ jobs:
                 mtime: 2024-01-01T00:00:00Z
             - src: ./files/telemt-web-check
               dst: /usr/libexec/telemt-web-check
+              file_info:
+                mode: 0755
+                mtime: 2024-01-01T00:00:00Z
+            - src: ./files/telemt-web-frontend
+              dst: /usr/libexec/telemt-web-frontend
+              file_info:
+                mode: 0755
+                mtime: 2024-01-01T00:00:00Z
+            - src: ./files/telemt-web-haproxy.hotplug
+              dst: /etc/hotplug.d/acme/95-telemt-web-haproxy
               file_info:
                 mode: 0755
                 mtime: 2024-01-01T00:00:00Z
@@ -328,6 +348,16 @@ jobs:
               file_info:
                 mode: 0755
                 mtime: 2024-01-01T00:00:00Z
+            - src: ./files/telemt-web-frontend
+              dst: /usr/libexec/telemt-web-frontend
+              file_info:
+                mode: 0755
+                mtime: 2024-01-01T00:00:00Z
+            - src: ./files/telemt-web-haproxy.hotplug
+              dst: /etc/hotplug.d/acme/95-telemt-web-haproxy
+              file_info:
+                mode: 0755
+                mtime: 2024-01-01T00:00:00Z
             - src: ./files/telemt.config
               dst: /etc/config/telemt
               type: config
@@ -373,6 +403,14 @@ jobs:
               dst: /usr/libexec/telemt-web-check
               file_info:
                 mode: 0755
+            - src: ./files/telemt-web-frontend
+              dst: /usr/libexec/telemt-web-frontend
+              file_info:
+                mode: 0755
+            - src: ./files/telemt-web-haproxy.hotplug
+              dst: /etc/hotplug.d/acme/95-telemt-web-haproxy
+              file_info:
+                mode: 0755
             - src: ./files/telemt.config
               dst: /etc/config/telemt
               type: config
@@ -410,6 +448,14 @@ jobs:
                 mode: 0755
             - src: ./files/telemt-web-check
               dst: /usr/libexec/telemt-web-check
+              file_info:
+                mode: 0755
+            - src: ./files/telemt-web-frontend
+              dst: /usr/libexec/telemt-web-frontend
+              file_info:
+                mode: 0755
+            - src: ./files/telemt-web-haproxy.hotplug
+              dst: /etc/hotplug.d/acme/95-telemt-web-haproxy
               file_info:
                 mode: 0755
             - src: ./files/telemt.config
