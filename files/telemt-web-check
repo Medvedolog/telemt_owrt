@@ -1,0 +1,115 @@
+#!/bin/sh
+# Telemt WEB external-frontend status helper.
+# Read-only by design: reads UCI/runtime state, never writes config and never
+# starts a second Telemt process.
+
+. /lib/functions.sh
+
+CONF="/tmp/etc/telemt.toml"
+
+config_load telemt
+
+config_get_bool web_enabled web enabled 0
+config_get web_frontend web tls_terminator "external"
+config_get web_carrier web carrier "https"
+config_get_bool web_listener_enabled web_listener enabled 1
+config_get web_ip web_listener ip "127.0.0.1"
+config_get web_port web_listener port "18080"
+
+vhosts_enabled=0
+profiles_enabled=0
+profiles_active_users=0
+
+count_web_vhost() {
+    local s="$1" en
+    config_get_bool en "$s" enabled 1
+    [ "$en" -eq 1 ] && vhosts_enabled=$((vhosts_enabled + 1))
+}
+
+count_web_profile() {
+    local s="$1" en user user_type user_en
+    config_get_bool en "$s" enabled 1
+    [ "$en" -eq 1 ] || return 0
+    profiles_enabled=$((profiles_enabled + 1))
+
+    config_get user "$s" user ""
+    [ -n "$user" ] || return 0
+    config_get user_type "$user" TYPE ""
+    [ "$user_type" = "user" ] || return 0
+    config_get_bool user_en "$user" enabled 1
+    [ "$user_en" -eq 1 ] && profiles_active_users=$((profiles_active_users + 1))
+}
+
+config_foreach count_web_vhost web_vhost
+config_foreach count_web_profile web_profile
+
+echo "Telemt WEB status"
+echo "  configured: $([ "$web_enabled" -eq 1 ] && echo enabled || echo disabled)"
+echo "  tls_frontend: ${web_frontend}"
+echo "  carrier: ${web_carrier}"
+echo "  backend: ${web_ip}:${web_port}"
+echo "  backend_enabled: $([ "$web_listener_enabled" -eq 1 ] && echo yes || echo no)"
+echo "  vhosts_enabled: ${vhosts_enabled}"
+echo "  profiles_enabled: ${profiles_enabled}"
+echo "  profiles_with_enabled_shared_user: ${profiles_active_users}"
+
+if [ -f "$CONF" ] && grep -q '^transport = "web"$' "$CONF" 2>/dev/null && grep -q '^\[web\]$' "$CONF" 2>/dev/null; then
+    runtime_toml="active"
+else
+    runtime_toml="inactive"
+fi
+echo "  runtime_toml: ${runtime_toml}"
+
+if pidof telemt >/dev/null 2>&1; then
+    process_state="running"
+else
+    process_state="stopped"
+fi
+echo "  process: ${process_state}"
+
+socket_state="unknown"
+if command -v ss >/dev/null 2>&1; then
+    if ss -lnt 2>/dev/null | grep -Eq ":${web_port}[[:space:]]"; then
+        socket_state="listening"
+    else
+        socket_state="not-detected"
+    fi
+elif command -v netstat >/dev/null 2>&1; then
+    if netstat -lnt 2>/dev/null | grep -Eq ":${web_port}[[:space:]]"; then
+        socket_state="listening"
+    else
+        socket_state="not-detected"
+    fi
+fi
+echo "  backend_socket: ${socket_state}"
+
+if [ "$web_enabled" -ne 1 ]; then
+    exit 0
+fi
+
+status=0
+if [ "$web_frontend" != "external" ]; then
+    echo "  warning: managed '${web_frontend}' frontend is not implemented in this LAB; configure it externally"
+fi
+if [ "$web_listener_enabled" -ne 1 ]; then
+    echo "  error: WEB is enabled but backend listener is disabled"
+    status=1
+fi
+if [ "$vhosts_enabled" -eq 0 ]; then
+    echo "  error: WEB is enabled but no vhost is enabled"
+    status=1
+fi
+if [ "$profiles_enabled" -eq 0 ]; then
+    echo "  error: WEB is enabled but no profile is enabled"
+    status=1
+fi
+if [ "$process_state" = "running" ] && [ "$profiles_active_users" -gt 0 ] && [ "$runtime_toml" != "active" ]; then
+    echo "  error: service is running with active WEB profiles but runtime TOML has no WEB listener"
+    status=1
+fi
+if [ "$process_state" = "running" ] && [ "$runtime_toml" = "active" ] && [ "$socket_state" = "not-detected" ]; then
+    echo "  error: runtime WEB is active but backend socket :${web_port} is not listening"
+    status=1
+fi
+
+exit "$status"
