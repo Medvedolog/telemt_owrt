@@ -11,10 +11,10 @@ Telegram Desktop
     -> HTTPS/WSS :443
     -> NGINX или HAProxy (TLS termination)
     -> plain HTTP/1.1
-    -> Telemt WEB backend 127.0.0.1:18080
+    -> Telemt WEB backend 127.0.0.1:27453
 ```
 
-Telemt не должен получать публичный TLS напрямую. Порт `18080` не открывается в WAN firewall.
+Telemt не должен получать публичный TLS напрямую. Порт `27453` не открывается в WAN firewall.
 
 ## Минимальный UCI
 
@@ -36,7 +36,7 @@ config web 'web'
 config web_listener 'web_listener'
         option enabled '1'
         option ip '127.0.0.1'
-        option port '18080'
+        option port '27453'
         option client_ip_source 'x_forwarded_for'
         list trusted_proxy_cidr '127.0.0.1/32'
 
@@ -46,7 +46,7 @@ config web_vhost 'web_main'
         option host 'proxy.example.com'
         option public_addr '203.0.113.10:443'
         option decoy_mode 'http_upstream'
-        option decoy_upstream 'http://127.0.0.1:18081'
+        option decoy_upstream 'http://127.0.0.1:27454'
 
 config web_profile 'web_main_user'
         option enabled '1'
@@ -77,7 +77,7 @@ option ip '127.0.0.1'
 list trusted_proxy_cidr '127.0.0.1/32'
 ```
 
-NGINX/HAProxy должен подключаться к `127.0.0.1:18080`.
+NGINX/HAProxy должен подключаться к `127.0.0.1:27453`.
 
 Учтите, что штатный `uhttpd` OpenWrt часто уже занимает TCP/443 для LuCI. Перед запуском NGINX/HAProxy на `:443` конфликт нужно решить явно. `telemt_owrt` в External mode не перенастраивает `uhttpd` автоматически.
 
@@ -90,7 +90,7 @@ option ip '192.168.1.1'
 list trusted_proxy_cidr '192.168.1.10/32'
 ```
 
-Не открывайте backend `18080` в WAN и не используйте `/0` в `trusted_proxy_cidr`.
+Не открывайте backend `27453` в WAN и не используйте `/0` в `trusted_proxy_cidr`.
 
 ## NGINX
 
@@ -103,7 +103,7 @@ map $http_upgrade $telemt_connection_upgrade {
 }
 
 upstream telemt_web {
-    server 127.0.0.1:18080;
+    server 127.0.0.1:27453;
     keepalive 64;
 }
 
@@ -170,7 +170,7 @@ backend telemt_web
     http-request set-header Host proxy.example.com
     http-request del-header X-Forwarded-For
     http-request set-header X-Forwarded-For %[src]
-    server telemt_web_1 127.0.0.1:18080 check
+    server telemt_web_1 127.0.0.1:27453 check
 ```
 
 HAProxy также не должен переписывать path, raw query, body, `Connection`, `Upgrade`, `Sec-WebSocket-*` и carrier headers.
@@ -181,7 +181,7 @@ HAProxy также не должен переписывать path, raw query, b
 
 ```uci
 option decoy_mode 'http_upstream'
-option decoy_upstream 'http://127.0.0.1:18081'
+option decoy_upstream 'http://127.0.0.1:27454'
 ```
 
 Origin должен быть `http://` на loopback/link-local/private IP literal, без credentials, path, query и fragment.
@@ -210,7 +210,7 @@ WEB structure находится в CORE части сгенерированно
 ```text
 configured: enabled
 tls_frontend: external
-backend: 127.0.0.1:18080
+backend: 127.0.0.1:27453
 runtime_toml: active
 process: running
 backend_socket: listening
