@@ -29,7 +29,7 @@ load_config() {
     config_get_bool haproxy_auto_fw web haproxy_auto_fw 1
     config_get_bool web_listener_enabled web_listener enabled 1
     config_get web_ip web_listener ip '127.0.0.1'
-    config_get web_port web_listener port '18080'
+    config_get web_port web_listener port '27453'
 
     web_hosts=''
     web_host_count=0
