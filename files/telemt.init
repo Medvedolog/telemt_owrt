@@ -144,6 +144,7 @@ generate_toml() {
     local metrics_listen_addr api_listen_addr
     # 3.4.18 additions
     local client_mss mask_dynamic
+    local direct_relay_buffer_budget_max_mib direct_relay_buffer_budget_max_bytes
     # 3.5.6 WEB core + vhosts/profiles
     local web_enabled web_runtime_enabled web_listener_enabled web_ip web_port web_client_ip_source web_carrier
     local web_carrier_policy web_carriers_toml web_carrier_learning web_carrier_negotiation_aggressiveness web_carrier_seen web_carrier_error
@@ -155,6 +156,16 @@ generate_toml() {
     config_get port general port "8443"
     config_get metrics_port general metrics_port "9092"
     config_get api_port general api_port "9091"
+    config_get direct_relay_buffer_budget_max_mib general direct_relay_buffer_budget_max_mib "0"
+    if ! is_uint "$direct_relay_buffer_budget_max_mib"; then
+        logger -t telemt "Init: invalid direct_relay_buffer_budget_max_mib '$direct_relay_buffer_budget_max_mib'; using Auto"
+        direct_relay_buffer_budget_max_mib=0
+    fi
+    if [ "$direct_relay_buffer_budget_max_mib" -ne 0 ] && { [ "$direct_relay_buffer_budget_max_mib" -lt 16 ] || [ "$direct_relay_buffer_budget_max_mib" -gt 2048 ]; }; then
+        logger -t telemt "Init: direct_relay_buffer_budget_max_mib outside 16..2048; using Auto"
+        direct_relay_buffer_budget_max_mib=0
+    fi
+    direct_relay_buffer_budget_max_bytes=$((direct_relay_buffer_budget_max_mib * 1048576))
 
     is_uint "$port" || port=8443
     is_uint "$metrics_port" || metrics_port=9092
@@ -652,6 +663,7 @@ fast_mode = true
 use_middle_proxy = $mp_str
 log_level = "$log_level"
 tg_connect = $tm_connect
+direct_relay_buffer_budget_max_bytes = $direct_relay_buffer_budget_max_bytes
 TOML
 
     # PATCH 3.3.22: data_path — runtime data directory
