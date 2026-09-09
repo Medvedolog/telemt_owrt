@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      attestations: read
 
     env:
       VERSION: '3.5.6'
@@ -84,7 +85,7 @@ jobs:
             exit 1
           fi
 
-      - name: Install build and packaging tools
+      - name: Install build and IPK packaging tools
         shell: bash
         run: |
           set -euxo pipefail
@@ -100,6 +101,11 @@ jobs:
           NFPM_VER="${NFPM_TAG#v}"
           curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/${NFPM_TAG}/nfpm_${NFPM_VER}_Linux_x86_64.tar.gz" | tar -xz
           sudo install -m 0755 nfpm /usr/local/bin/nfpm
+
+      - name: Setup verified owfeed
+        uses: owfeed/owfeed/setup@v0.5.1
+        with:
+          version: v0.5.1
 
       - name: Build aarch64 Telemt 3.5.6 locked
         shell: bash
@@ -147,7 +153,7 @@ jobs:
           printf '\nMTProxy v%s\n' "$VERSION" >> "$X86_64_OUT_BIN"
           tail -c 512 "$X86_64_OUT_BIN" | grep -a -q "MTProxy v${VERSION}"
 
-      - name: Build representative IPK and APK
+      - name: Build and inspect OpenWrt 24.10 IPK
         shell: bash
         run: |
           set -euxo pipefail
@@ -193,19 +199,18 @@ jobs:
           EOF
 
           nfpm package --config nfpm-ci.yaml --packager ipk --target telemt-ci.ipk
-          nfpm package --config nfpm-ci.yaml --packager apk --target telemt-ci.apk
           test -s telemt-ci.ipk
-          test -s telemt-ci.apk
 
           mkdir -p ipk-unpack
-          cd ipk-unpack
-          ar x ../telemt-ci.ipk
-          DATA_ARCHIVE="$(find . -maxdepth 1 -type f -name 'data.tar.*' | head -n1)"
-          test -n "$DATA_ARCHIVE"
-          tar -tf "$DATA_ARCHIVE" > ../ipk-files.txt
-          cd ..
+          tar -xzf telemt-ci.ipk -C ipk-unpack
+          test -f ipk-unpack/debian-binary
+          test -f ipk-unpack/control.tar.gz
+          test -f ipk-unpack/data.tar.gz
+          tar -tzf ipk-unpack/data.tar.gz > ipk-files.txt
+          tar -xOzf ipk-unpack/control.tar.gz ./control > ipk-control.txt
+          grep -q '^Architecture: aarch64_generic$' ipk-control.txt
+          grep -q '^Package: telemt$' ipk-control.txt
 
-          tar -tf telemt-ci.apk > apk-files.txt
           for path in \
             usr/bin/telemt \
             etc/init.d/telemt \
@@ -214,7 +219,71 @@ jobs:
             etc/hotplug.d/acme/95-telemt-web-haproxy \
             etc/config/telemt; do
             grep -Eq "(^|\./)${path}$" ipk-files.txt
-            grep -Eq "(^|\./)${path}$" apk-files.txt
+          done
+
+      - name: Stage architecture-specific OpenWrt APKv3 payloads
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          rm -rf .ci/stage dist
+          for arch in aarch64_generic aarch64_cortex-a53 x86_64; do
+            root=".ci/stage/${arch}"
+            mkdir -p "$root/usr/bin" "$root/etc/init.d" "$root/etc/config" \
+              "$root/usr/libexec" "$root/etc/hotplug.d/acme"
+
+            if [ "$arch" = x86_64 ]; then
+              install -m 0755 "$X86_64_OUT_BIN" "$root/usr/bin/telemt"
+            else
+              install -m 0755 "$AARCH64_OUT_BIN" "$root/usr/bin/telemt"
+            fi
+            install -m 0755 files/telemt.init "$root/etc/init.d/telemt"
+            install -m 0755 files/telemt-web-check "$root/usr/libexec/telemt-web-check"
+            install -m 0755 files/telemt-web-frontend "$root/usr/libexec/telemt-web-frontend"
+            install -m 0755 files/telemt-web-haproxy.hotplug "$root/etc/hotplug.d/acme/95-telemt-web-haproxy"
+            install -m 0644 files/telemt.config "$root/etc/config/telemt"
+          done
+
+          cat > owfeed.yml <<'EOF'
+          version: 1
+          feed:
+            name: telemt-ci
+            url: https://example.invalid/telemt-ci
+            title: Telemt CI
+            maintainer: "Telemt Team <noreply@example.invalid>"
+          build:
+            sdk:
+              release: "25.12.2"
+          releases:
+            - line: "25.12"
+              format: apk
+              default: true
+              arches: [aarch64_generic, aarch64_cortex-a53, x86_64]
+          packages:
+            - name: telemt
+              build: mkpkg
+              arch: [aarch64_generic, aarch64_cortex-a53, x86_64]
+              version: 3.5.6-r1
+              files: ./.ci/stage/{arch}
+              description: "Telemt 3.5.6 WEB branch CI package"
+              url: https://github.com/Medvedolog/telemt_owrt
+              conffiles: ["/etc/config/telemt"]
+          EOF
+
+      - name: Build and verify OpenWrt 25.12 APKv3
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          owfeed lock --update
+          owfeed build --release 25.12 -o dist
+
+          test "$(find dist -type f -name '*.apk' | wc -l)" -eq 3
+          for arch in aarch64_generic aarch64_cortex-a53 x86_64; do
+            apk="dist/${arch}/telemt-3.5.6-r1.apk"
+            test -s "$apk"
+            magic="$(od -An -tx1 -N3 "$apk" | tr -d ' \n')"
+            test "$magic" = 414442
           done
 
       - name: Upload CI packages
@@ -226,6 +295,7 @@ jobs:
             telemt-aarch64-musl
             telemt-x86_64-musl
             telemt-ci.ipk
-            telemt-ci.apk
             ipk-files.txt
-            apk-files.txt
+            ipk-control.txt
+            dist/*/*.apk
+            owfeed.lock
