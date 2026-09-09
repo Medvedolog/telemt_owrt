@@ -1,0 +1,98 @@
+name: Apply Telemt 3.5.7 memory-budget patch
+
+on:
+  push:
+    branches: [telemt-3.5.6-web]
+    paths: [.github/workflows/_apply-357-memory-patch.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: telemt-3.5.6-web
+          fetch-depth: 0
+      - name: Apply minimal source patch
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              s = p.read_text()
+              n = s.count(old)
+              if n != 1:
+                  raise SystemExit(f"{path}: expected exactly one anchor, found {n}: {old!r}")
+              p.write_text(s.replace(old, new, 1))
+
+          # Persistent UCI: MiB is operator-facing; 0 preserves upstream Auto.
+          replace_once(
+              "files/telemt.config",
+              "\toption log_level 'normal'\n",
+              "\toption log_level 'normal'\n\t# Telemt 3.5.7 Direct relay copy-buffer hard ceiling. 0 = Auto from host/cgroup memory.\n\toption direct_relay_buffer_budget_max_mib '0'\n",
+          )
+
+          # init.d: validate MiB and translate to upstream byte key.
+          replace_once(
+              "files/telemt.init",
+              "    local client_mss mask_dynamic\n",
+              "    local client_mss mask_dynamic\n    local direct_relay_buffer_budget_max_mib direct_relay_buffer_budget_max_bytes\n",
+          )
+          replace_once(
+              "files/telemt.init",
+              "    config_get api_port general api_port \"9091\"\n\n",
+              "    config_get api_port general api_port \"9091\"\n    config_get direct_relay_buffer_budget_max_mib general direct_relay_buffer_budget_max_mib \"0\"\n    if ! is_uint \"$direct_relay_buffer_budget_max_mib\"; then\n        logger -t telemt \"Init: invalid direct_relay_buffer_budget_max_mib '$direct_relay_buffer_budget_max_mib'; using Auto\"\n        direct_relay_buffer_budget_max_mib=0\n    fi\n    if [ \"$direct_relay_buffer_budget_max_mib\" -ne 0 ] && { [ \"$direct_relay_buffer_budget_max_mib\" -lt 16 ] || [ \"$direct_relay_buffer_budget_max_mib\" -gt 2048 ]; }; then\n        logger -t telemt \"Init: direct_relay_buffer_budget_max_mib outside 16..2048; using Auto\"\n        direct_relay_buffer_budget_max_mib=0\n    fi\n    direct_relay_buffer_budget_max_bytes=$((direct_relay_buffer_budget_max_mib * 1048576))\n\n",
+          )
+          replace_once(
+              "files/telemt.init",
+              "tg_connect = $tm_connect\nTOML\n",
+              "tg_connect = $tm_connect\ndirect_relay_buffer_budget_max_bytes = $direct_relay_buffer_budget_max_bytes\nTOML\n",
+          )
+
+          # CI moves to upstream 3.5.7 but branch name intentionally stays telemt-3.5.6-web.
+          p = Path(".github/workflows/telemt-3.5.6-web-ci.yml")
+          s = p.read_text()
+          replacements = {
+              "name: Validate Telemt 3.5.6 WEB branch": "name: Validate Telemt 3.5.7 WEB branch",
+              "VERSION: '3.5.6'": "VERSION: '3.5.7'",
+              "Checkout upstream Telemt 3.5.6": "Checkout upstream Telemt 3.5.7",
+              "ref: 3.5.6\n          path: upstream_src": "ref: 3.5.7\n          path: upstream_src",
+              "version = \\\"3\\.5\\.6\\\"": "version = \\\"3\\.5\\.7\\\"",
+              "Build aarch64 Telemt 3.5.6 locked": "Build aarch64 Telemt 3.5.7 locked",
+              "telemt-3.5.6-r1.apk": "telemt-3.5.7-r1.apk",
+              "version: 3.5.6-r1": "version: 3.5.7-r1",
+              "Telemt 3.5.6 WEB branch CI package": "Telemt 3.5.7 WEB branch CI package",
+          }
+          for old, new in replacements.items():
+              if old not in s:
+                  raise SystemExit(f"CI anchor missing: {old!r}")
+              s = s.replace(old, new)
+          marker = "          sh -n files/telemt-web-haproxy.hotplug\n"
+          if marker not in s:
+              raise SystemExit("CI shell-check marker missing")
+          s = s.replace(marker, marker + "\n          grep -q \"option direct_relay_buffer_budget_max_mib '0'\" files/telemt.config\n          grep -q 'config_get direct_relay_buffer_budget_max_mib general direct_relay_buffer_budget_max_mib \"0\"' files/telemt.init\n          grep -q 'direct_relay_buffer_budget_max_bytes = \\$direct_relay_buffer_budget_max_bytes' files/telemt.init\n", 1)
+          p.write_text(s)
+          PY
+
+          sh -n files/telemt.init
+          grep -n 'direct_relay_buffer_budget' files/telemt.config files/telemt.init .github/workflows/telemt-3.5.6-web-ci.yml
+          grep -n "VERSION: '3.5.7'" .github/workflows/telemt-3.5.6-web-ci.yml
+          git diff --check
+          git diff -- files/telemt.config files/telemt.init .github/workflows/telemt-3.5.6-web-ci.yml
+
+      - name: Commit patch and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/_apply-357-memory-patch.yml
+          git add files/telemt.config files/telemt.init .github/workflows/telemt-3.5.6-web-ci.yml
+          git commit -m 'core: move WEB alpha to Telemt 3.5.7 and expose Direct memory budget'
+          git push origin HEAD:telemt-3.5.6-web
