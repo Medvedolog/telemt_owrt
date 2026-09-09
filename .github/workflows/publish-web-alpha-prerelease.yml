@@ -64,7 +64,7 @@ jobs:
           name: telemt
           arch: ${arch}
           platform: linux
-          version: 3.5.6-alpha1
+          version: 3.5.6-r2
           section: net
           priority: optional
           maintainer: Telemt Team
@@ -106,7 +106,7 @@ jobs:
           cat > ../luci-alpha.yaml <<'EOF'
           name: luci-app-telemt
           platform: linux
-          version: 3.5.6-alpha1
+          version: 3.5.6-r2
           section: net
           maintainer: Medvedolog
           description: LuCI for Telemt 3.5.6 WEB alpha
@@ -152,7 +152,7 @@ jobs:
             - name: luci-app-telemt
               build: mkpkg
               arch: [noarch]
-              version: 3.5.6-alpha1
+              version: 3.5.6-r2
               files: ./.luci-stage/{arch}
               description: "LuCI for Telemt 3.5.6 WEB alpha"
               url: https://github.com/Medvedolog/luci-app-telemt
@@ -160,7 +160,7 @@ jobs:
           EOF
           owfeed --config luci-owfeed.yml lock --update
           owfeed --config luci-owfeed.yml build --release 25.12 -o luci-dist
-          apk="luci-dist/noarch/luci-app-telemt-3.5.6-alpha1.apk"
+          apk="luci-dist/noarch/luci-app-telemt-3.5.6-r2.apk"
           test -s "$apk"
           test "$(od -An -tx1 -N3 "$apk" | tr -d ' \n')" = 414442
           cp "$apk" release/luci/apk/luci-app-telemt_3.5.6-web-alpha1_noarch.apk
@@ -192,9 +192,9 @@ jobs:
           - HAProxy/NGINX paths подготовлены для HTTP/2 lanes и WebSocket Upgrade.
 
           ### Что ставить
-          **OpenWrt 24.10:** `core/ipk` + `luci/ipk`.
+          **OpenWrt 24.10:** core `.ipk` своей архитектуры + `luci-app-telemt_..._all.ipk`.
 
-          **OpenWrt 25.12:** `core/apk` + `luci/apk`. APKv3 собраны через **owfeed**.
+          **OpenWrt 25.12:** core `.apk` своей архитектуры + `luci-app-telemt_..._noarch.apk`. APKv3 собраны через **owfeed**.
 
           Core есть для `aarch64_generic`, `aarch64_cortex-a53`, `x86_64`. LuCI: `all.ipk` / `noarch.apk`.
 
