@@ -19,8 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: 3.5.6-web-alpha1
-      CORE_RUN_ID: '35311894280'
-      CORE_SHA: e7137356ea97e6b3f7a44517dec2f1918d2f68de
+      CORE_RUN_ID: '35318653742'
+      CORE_SHA: fef91a0f62cd912577ecc7b829bb1e024d4b6f98
       LUCI_SHA: df83113abccbc30ca4b7f8aadee41eac62187cf8
       VERSION: 3.5.7
       ALPHA: 3.5.7-web-alpha1
@@ -92,7 +92,7 @@ jobs:
             - name: luci-app-telemt
               build: mkpkg
               arch: noarch
-              version: 3.5.7-r1
+              version: 3.5.7-r2
               files: ./.release-stage/root
               description: "LuCI WebUI for Telemt 3.5.7 WEB alpha"
               url: https://github.com/Medvedolog/luci-app-telemt
