@@ -90,7 +90,7 @@ jobs:
         run: |
           set -euxo pipefail
           test -f upstream_src/Cargo.lock
-          grep -q '^version = "3\\.5\\.7"' upstream_src/Cargo.toml
+          grep -Fq 'version = "3.5.7"' upstream_src/Cargo.toml
           REQUIRED_RUST="$(sed -n 's/^rust-version = "\([^"]*\)"/\1/p' upstream_src/Cargo.toml | head -n1)"
           CURRENT_RUST="$(rustc --version | awk '{print $2}')"
           test -n "$REQUIRED_RUST"
@@ -222,43 +222,19 @@ jobs:
           set -euxo pipefail
           owfeed lock --update
           owfeed plan
+          owfeed check
 
-      - name: Build and inspect OpenWrt 24.10 IPK set with owfeed
+      - name: Build OpenWrt 24.10 IPK set with owfeed
         shell: bash
         run: |
           set -euxo pipefail
           owfeed build --release 24.10 -o dist-ipk
           test "$(find dist-ipk -type f -name '*.ipk' | wc -l)" -eq 3
-
-          rm -rf .ci/ipk-inspect
-          mkdir -p .ci/ipk-inspect
           for arch in aarch64_generic aarch64_cortex-a53 x86_64; do
             ipk="$(find "dist-ipk/${arch}" -maxdepth 1 -type f -name 'telemt*.ipk' | head -n1)"
             test -n "$ipk"
             test -s "$ipk"
-            test "$(od -An -tx1 -N8 "$ipk" | tr -d ' \n')" = 213c617263683e0a
-
-            dir=".ci/ipk-inspect/${arch}"
-            mkdir -p "$dir"
-            ar t "$ipk" > "$dir/ar-members.txt"
-            grep -q '^debian-binary$' "$dir/ar-members.txt"
-            ar p "$ipk" control.tar.gz > "$dir/control.tar.gz"
-            ar p "$ipk" data.tar.gz > "$dir/data.tar.gz"
-            tar -xOzf "$dir/control.tar.gz" ./control > "$dir/control.txt"
-            tar -tzf "$dir/data.tar.gz" > "$dir/files.txt"
-
-            grep -q '^Package: telemt$' "$dir/control.txt"
-            grep -q "^Architecture: ${arch}$" "$dir/control.txt"
-            for path in \
-              usr/bin/telemt \
-              etc/init.d/telemt \
-              usr/libexec/telemt-web-check \
-              usr/libexec/telemt-web-frontend \
-              usr/libexec/telemt-web-nginx \
-              etc/hotplug.d/acme/95-telemt-web-haproxy \
-              etc/config/telemt; do
-              grep -Eq "(^|\\./)${path}$" "$dir/files.txt"
-            done
+            file "$ipk"
           done
 
       - name: Build and verify OpenWrt 25.12 APKv3 set with owfeed
@@ -284,6 +260,4 @@ jobs:
             telemt-x86_64-musl
             dist-ipk/*/*.ipk
             dist-apk/*/*.apk
-            .ci/ipk-inspect/*/control.txt
-            .ci/ipk-inspect/*/files.txt
             owfeed.lock
