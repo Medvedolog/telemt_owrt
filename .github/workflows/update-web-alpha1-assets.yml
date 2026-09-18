@@ -21,7 +21,7 @@ jobs:
       RELEASE_TAG: 3.5.6-web-alpha1
       CORE_RUN_ID: '35311894280'
       CORE_SHA: e7137356ea97e6b3f7a44517dec2f1918d2f68de
-      LUCI_SHA: 7a3546e665415bb5a7c625bb4810c3ed3fc4a2c4
+      LUCI_SHA: df83113abccbc30ca4b7f8aadee41eac62187cf8
       VERSION: 3.5.7
       ALPHA: 3.5.7-web-alpha1
 
