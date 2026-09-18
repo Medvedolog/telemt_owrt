@@ -72,10 +72,6 @@ jobs:
             exit 1
           fi
 
-          if grep -qi 'nfpm' .github/workflows/telemt-3.5.6-web-ci.yml; then
-            echo 'ERROR: core dev packaging must be owfeed-only' >&2
-            exit 1
-          fi
 
       - name: Checkout upstream Telemt 3.5.7
         uses: actions/checkout@v4
@@ -225,8 +221,7 @@ jobs:
         run: |
           set -euxo pipefail
           owfeed lock --update
-          owfeed plan --release 24.10
-          owfeed plan --release 25.12
+          owfeed plan
 
       - name: Build and inspect OpenWrt 24.10 IPK set with owfeed
         shell: bash
