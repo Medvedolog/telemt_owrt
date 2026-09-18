@@ -33,7 +33,12 @@ jobs:
           set -euxo pipefail
 
           sh -n files/telemt.init
+          sh -n files/telemt.postinst
           sh -n files/telemt-web-check
+          grep -q 'ensure_section web web' files/telemt.postinst
+          grep -q 'ensure_option web enabled 0' files/telemt.postinst
+          grep -q 'ensure_section web_listener web_listener' files/telemt.postinst
+          grep -q 'uci -q commit telemt' files/telemt.postinst
           sh -n files/telemt-web-frontend
           sh -n files/telemt-web-nginx
           sh -n files/telemt-web-haproxy.hotplug
