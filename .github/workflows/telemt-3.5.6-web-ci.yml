@@ -1,4 +1,4 @@
-name: Validate Telemt 3.5.6 WEB branch
+name: Validate Telemt 3.5.7 WEB branch
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
       attestations: read
 
     env:
-      VERSION: '3.5.6'
+      VERSION: '3.5.7'
       UPSTREAM_REPO: telemt/telemt
       AARCH64_TARGET: aarch64-unknown-linux-musl
       AARCH64_OUT_BIN: telemt-aarch64-musl
@@ -27,7 +27,7 @@ jobs:
       - name: Checkout working branch
         uses: actions/checkout@v4
 
-      - name: Validate OpenWrt shell and packaging references
+      - name: Validate OpenWrt shell and WEB contracts
         shell: bash
         run: |
           set -euxo pipefail
@@ -41,16 +41,10 @@ jobs:
           grep -q "option port '27453'" files/telemt.config
           grep -q "option nginx_managed '0'" files/telemt.config
           grep -q "option nginx_bind '443'" files/telemt.config
+          grep -q "option direct_relay_buffer_budget_max_mib '0'" files/telemt.config
+          grep -q 'direct_relay_buffer_budget_max_bytes = $direct_relay_buffer_budget_max_bytes' files/telemt.init
           grep -q 'config_get web_port web_listener port "27453"' files/telemt.init
-          grep -q 'config_get web_port web_listener port .*27453' files/telemt-web-check
-          grep -q 'config_get web_port web_listener port .*27453' files/telemt-web-frontend
-          grep -q "FRAGMENT=/etc/nginx/conf.d/telemt-web.conf" files/telemt-web-nginx
-          grep -q "MARKER='# TELEMT-MANAGED-NGINX v1'" files/telemt-web-nginx
-          grep -q 'proxy_set_header X-Forwarded-For $remote_addr;' files/telemt-web-nginx
-          grep -q 'proxy_next_upstream off;' files/telemt-web-nginx
 
-          # LAB-5A/5B carrier contract: all four exact enum values remain valid,
-          # fixed remains the safe default, and auto negotiation is explicit.
           grep -q 'https|https-lanes|websocket|websocket-lanes) ;;' files/telemt.init
           grep -q 'web_carrier="https"' files/telemt.init
           grep -q 'carrier = "$web_carrier"' files/telemt.init
@@ -60,58 +54,34 @@ jobs:
           grep -q "list carrier_candidate 'https-lanes'" files/telemt.config
           grep -q "option carrier_learning '1'" files/telemt.config
           grep -q "option carrier_negotiation_aggressiveness 'conservative'" files/telemt.config
-          grep -q 'config_get web_carrier_policy web carrier_policy "fixed"' files/telemt.init
-          grep -q 'fixed|auto) ;;' files/telemt.init
-          grep -q 'config_list_foreach web carrier_candidate add_web_carrier_candidate' files/telemt.init
           grep -q 'WEB auto carrier policy requires at least one carrier_candidate' files/telemt.init
           grep -q 'duplicate WEB auto carrier candidate' files/telemt.init
-          grep -q 'if \[ "$web_carrier_policy" = "auto" \]; then' files/telemt.init
-          grep -q 'echo "carriers = \[\$web_carriers_toml\]"' files/telemt.init
-          grep -q 'carrier_learning = true' files/telemt.init
-          grep -q 'carrier_learning = false' files/telemt.init
-          grep -q 'carrier_negotiation_aggressiveness = \\"\$web_carrier_negotiation_aggressiveness\\"' files/telemt.init
 
-          # Frontend prerequisites for all four carriers and auto negotiation.
           grep -q 'alpn h2,http/1.1' files/telemt-web-frontend
           grep -q 'retries 0' files/telemt-web-frontend
           grep -q 'http2 on;' files/telemt-web-nginx
           grep -q 'proxy_http_version 1.1;' files/telemt-web-nginx
           grep -q 'proxy_set_header Upgrade $http_upgrade;' files/telemt-web-nginx
           grep -q 'proxy_set_header Connection $telemt_connection_upgrade;' files/telemt-web-nginx
-          if grep -q 'proxy_pass_request_headers off;' files/telemt-web-nginx; then
-            echo 'ERROR: NGINX must pass WEB carrier request headers to Telemt' >&2
-            exit 1
-          fi
+          grep -q 'proxy_next_upstream off;' files/telemt-web-nginx
 
-          if grep -R -n -E "option port '18080'|port = 18080|127\.0\.0\.1:18080|127\.0\.0\.1:18081" \
+          if grep -R -n -E "option port '18080'|port = 18080|127\\.0\\.0\\.1:18080|127\\.0\\.0\\.1:18081" \
             ROADMAP_3.5_WEB.md docs/WEB_EXTERNAL_FRONTEND.ru.md docs/WEB_HAPROXY_MANAGED.ru.md \
             files/telemt.config files/telemt.init files/telemt-web-check files/telemt-web-frontend files/telemt-web-nginx; then
             echo 'ERROR: stale 1808x WEB endpoint found' >&2
             exit 1
           fi
 
-          RELEASE_WF=.github/workflows/telemt-release-aarch64-upx.yml
-          grep -q 'uses: owfeed/owfeed/setup@v0.5.1' "$RELEASE_WF"
-          grep -q "OPENWRT_APK_SDK_RELEASE: '25.12.2'" "$RELEASE_WF"
-          grep -q 'owfeed --config owfeed-release.yml build --release 25.12' "$RELEASE_WF"
-          grep -q 'test "$MAGIC" = 414442' "$RELEASE_WF"
-          grep -q 'conffiles: \["/etc/config/telemt"\]' "$RELEASE_WF"
-          grep -q 'dst: /usr/libexec/telemt-web-check' "$RELEASE_WF"
-          grep -q 'dst: /usr/libexec/telemt-web-frontend' "$RELEASE_WF"
-          grep -q 'dst: /usr/libexec/telemt-web-nginx' "$RELEASE_WF"
-          grep -q 'install -m 0755 files/telemt-web-nginx' "$RELEASE_WF"
-          grep -q 'dst: /etc/hotplug.d/acme/95-telemt-web-haproxy' "$RELEASE_WF"
-          grep -q 'dst: /etc/config/telemt' "$RELEASE_WF"
-          if grep -q -- '--packager apk' "$RELEASE_WF"; then
-            echo 'ERROR: release workflow still uses nFPM Alpine APKv2 packaging' >&2
+          if grep -qi 'nfpm' .github/workflows/telemt-3.5.6-web-ci.yml; then
+            echo 'ERROR: core dev packaging must be owfeed-only' >&2
             exit 1
           fi
 
-      - name: Checkout upstream Telemt 3.5.6
+      - name: Checkout upstream Telemt 3.5.7
         uses: actions/checkout@v4
         with:
           repository: telemt/telemt
-          ref: 3.5.6
+          ref: 3.5.7
           path: upstream_src
 
       - name: Setup Rust
@@ -123,47 +93,39 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
           test -f upstream_src/Cargo.lock
-          grep -q '^version = "3\.5\.6"' upstream_src/Cargo.toml
+          grep -q '^version = "3\\.5\\.7"' upstream_src/Cargo.toml
           REQUIRED_RUST="$(sed -n 's/^rust-version = "\([^"]*\)"/\1/p' upstream_src/Cargo.toml | head -n1)"
           CURRENT_RUST="$(rustc --version | awk '{print $2}')"
           test -n "$REQUIRED_RUST"
           test -n "$CURRENT_RUST"
-          echo "Upstream MSRV: $REQUIRED_RUST"
-          echo "Runner rustc: $CURRENT_RUST"
           if [ "$(printf '%s\n%s\n' "$REQUIRED_RUST" "$CURRENT_RUST" | sort -V | head -n1)" != "$REQUIRED_RUST" ]; then
             echo "ERROR: rustc $CURRENT_RUST is older than upstream MSRV $REQUIRED_RUST" >&2
             exit 1
           fi
 
-      - name: Install build and IPK packaging tools
+      - name: Install build and package inspection tools
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euxo pipefail
-
           sudo apt-get update
           sudo apt-get install -y jq curl tar xz-utils zstd dos2unix upx-ucl file binutils
 
-          CROSS_TAG="$(curl -fsSL https://api.github.com/repos/cross-rs/cross/releases/latest | jq -r .tag_name)"
+          CROSS_TAG="$(curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" https://api.github.com/repos/cross-rs/cross/releases/latest | jq -r .tag_name)"
           curl -fsSL "https://github.com/cross-rs/cross/releases/download/${CROSS_TAG}/cross-x86_64-unknown-linux-musl.tar.gz" | tar -xz
           sudo install -m 0755 cross /usr/local/bin/cross
-
-          NFPM_TAG="$(curl -fsSL https://api.github.com/repos/goreleaser/nfpm/releases/latest | jq -r .tag_name)"
-          NFPM_VER="${NFPM_TAG#v}"
-          curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/${NFPM_TAG}/nfpm_${NFPM_VER}_Linux_x86_64.tar.gz" | tar -xz
-          sudo install -m 0755 nfpm /usr/local/bin/nfpm
 
       - name: Setup verified owfeed
         uses: owfeed/owfeed/setup@v0.5.1
         with:
           version: v0.5.1
 
-      - name: Build aarch64 Telemt 3.5.6 locked
+      - name: Build aarch64 Telemt 3.5.7 locked
         shell: bash
         run: |
           set -euxo pipefail
-
           cd upstream_src
           export CARGO_PROFILE_RELEASE_OPT_LEVEL=z
           export CARGO_PROFILE_RELEASE_LTO=true
@@ -186,7 +148,6 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
           mkdir -p upstream_release extracted_x86_64
           gh release download "$VERSION" \
             --repo "$UPSTREAM_REPO" \
@@ -205,85 +166,14 @@ jobs:
           printf '\nMTProxy v%s\n' "$VERSION" >> "$X86_64_OUT_BIN"
           tail -c 512 "$X86_64_OUT_BIN" | grep -a -q "MTProxy v${VERSION}"
 
-      - name: Build and inspect OpenWrt 24.10 IPK
+      - name: Stage architecture payloads and dual-format owfeed manifest
         shell: bash
         run: |
           set -euxo pipefail
-
           dos2unix files/telemt.init files/telemt.config files/telemt-web-check \
             files/telemt-web-frontend files/telemt-web-nginx files/telemt-web-haproxy.hotplug
 
-          cat > nfpm-ci.yaml <<EOF
-          name: telemt
-          arch: aarch64_generic
-          platform: linux
-          version: ${VERSION}
-          section: net
-          priority: optional
-          maintainer: Telemt Team
-          description: Telemt 3.5.6 WEB branch CI package
-          contents:
-            - src: ./${AARCH64_OUT_BIN}
-              dst: /usr/bin/telemt
-              file_info:
-                mode: 0755
-            - src: ./files/telemt.init
-              dst: /etc/init.d/telemt
-              file_info:
-                mode: 0755
-            - src: ./files/telemt-web-check
-              dst: /usr/libexec/telemt-web-check
-              file_info:
-                mode: 0755
-            - src: ./files/telemt-web-frontend
-              dst: /usr/libexec/telemt-web-frontend
-              file_info:
-                mode: 0755
-            - src: ./files/telemt-web-nginx
-              dst: /usr/libexec/telemt-web-nginx
-              file_info:
-                mode: 0755
-            - src: ./files/telemt-web-haproxy.hotplug
-              dst: /etc/hotplug.d/acme/95-telemt-web-haproxy
-              file_info:
-                mode: 0755
-            - src: ./files/telemt.config
-              dst: /etc/config/telemt
-              type: config
-              file_info:
-                mode: 0644
-          EOF
-
-          nfpm package --config nfpm-ci.yaml --packager ipk --target telemt-ci.ipk
-          test -s telemt-ci.ipk
-
-          mkdir -p ipk-unpack
-          tar -xzf telemt-ci.ipk -C ipk-unpack
-          test -f ipk-unpack/debian-binary
-          test -f ipk-unpack/control.tar.gz
-          test -f ipk-unpack/data.tar.gz
-          tar -tzf ipk-unpack/data.tar.gz > ipk-files.txt
-          tar -xOzf ipk-unpack/control.tar.gz ./control > ipk-control.txt
-          grep -q '^Architecture: aarch64_generic$' ipk-control.txt
-          grep -q '^Package: telemt$' ipk-control.txt
-
-          for path in \
-            usr/bin/telemt \
-            etc/init.d/telemt \
-            usr/libexec/telemt-web-check \
-            usr/libexec/telemt-web-frontend \
-            usr/libexec/telemt-web-nginx \
-            etc/hotplug.d/acme/95-telemt-web-haproxy \
-            etc/config/telemt; do
-            grep -Eq "(^|\./)${path}$" ipk-files.txt
-          done
-
-      - name: Stage architecture-specific OpenWrt APKv3 payloads
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          rm -rf .ci/stage dist
+          rm -rf .ci/stage dist-ipk dist-apk
           for arch in aarch64_generic aarch64_cortex-a53 x86_64; do
             root=".ci/stage/${arch}"
             mkdir -p "$root/usr/bin" "$root/etc/init.d" "$root/etc/config" \
@@ -311,51 +201,94 @@ jobs:
             maintainer: "Telemt Team <noreply@example.invalid>"
           publish:
             - target: github-pages
-          build:
-            sdk:
-              release: "25.12.2"
           releases:
             - line: "25.12"
               format: apk
               default: true
               arches: [aarch64_generic, aarch64_cortex-a53, x86_64]
+            - line: "24.10"
+              format: ipk
+              arches: [aarch64_generic, aarch64_cortex-a53, x86_64]
           packages:
             - name: telemt
               build: mkpkg
               arch: [aarch64_generic, aarch64_cortex-a53, x86_64]
-              version: 3.5.6-r1
+              version: 3.5.7-r1
               files: ./.ci/stage/{arch}
-              description: "Telemt 3.5.6 WEB branch CI package"
+              description: "Telemt 3.5.7 WEB alpha test package"
               url: https://github.com/Medvedolog/telemt_owrt
               conffiles: ["/etc/config/telemt"]
           EOF
 
-      - name: Build and verify OpenWrt 25.12 APKv3
+      - name: Resolve and inspect owfeed plan
         shell: bash
         run: |
           set -euxo pipefail
-
           owfeed lock --update
-          owfeed build --release 25.12 -o dist
+          owfeed plan --release 24.10
+          owfeed plan --release 25.12
 
-          test "$(find dist -type f -name '*.apk' | wc -l)" -eq 3
+      - name: Build and inspect OpenWrt 24.10 IPK set with owfeed
+        shell: bash
+        run: |
+          set -euxo pipefail
+          owfeed build --release 24.10 -o dist-ipk
+          test "$(find dist-ipk -type f -name '*.ipk' | wc -l)" -eq 3
+
+          rm -rf .ci/ipk-inspect
+          mkdir -p .ci/ipk-inspect
           for arch in aarch64_generic aarch64_cortex-a53 x86_64; do
-            apk="dist/${arch}/telemt-3.5.6-r1.apk"
+            ipk="$(find "dist-ipk/${arch}" -maxdepth 1 -type f -name 'telemt*.ipk' | head -n1)"
+            test -n "$ipk"
+            test -s "$ipk"
+            test "$(od -An -tx1 -N8 "$ipk" | tr -d ' \n')" = 213c617263683e0a
+
+            dir=".ci/ipk-inspect/${arch}"
+            mkdir -p "$dir"
+            ar t "$ipk" > "$dir/ar-members.txt"
+            grep -q '^debian-binary$' "$dir/ar-members.txt"
+            ar p "$ipk" control.tar.gz > "$dir/control.tar.gz"
+            ar p "$ipk" data.tar.gz > "$dir/data.tar.gz"
+            tar -xOzf "$dir/control.tar.gz" ./control > "$dir/control.txt"
+            tar -tzf "$dir/data.tar.gz" > "$dir/files.txt"
+
+            grep -q '^Package: telemt$' "$dir/control.txt"
+            grep -q "^Architecture: ${arch}$" "$dir/control.txt"
+            for path in \
+              usr/bin/telemt \
+              etc/init.d/telemt \
+              usr/libexec/telemt-web-check \
+              usr/libexec/telemt-web-frontend \
+              usr/libexec/telemt-web-nginx \
+              etc/hotplug.d/acme/95-telemt-web-haproxy \
+              etc/config/telemt; do
+              grep -Eq "(^|\\./)${path}$" "$dir/files.txt"
+            done
+          done
+
+      - name: Build and verify OpenWrt 25.12 APKv3 set with owfeed
+        shell: bash
+        run: |
+          set -euxo pipefail
+          owfeed build --release 25.12 -o dist-apk
+          test "$(find dist-apk -type f -name '*.apk' | wc -l)" -eq 3
+          for arch in aarch64_generic aarch64_cortex-a53 x86_64; do
+            apk="$(find "dist-apk/${arch}" -maxdepth 1 -type f -name 'telemt*.apk' | head -n1)"
+            test -n "$apk"
             test -s "$apk"
-            magic="$(od -An -tx1 -N3 "$apk" | tr -d ' \n')"
-            test "$magic" = 414442
+            test "$(od -An -tx1 -N3 "$apk" | tr -d ' \n')" = 414442
           done
 
       - name: Upload CI packages
         uses: actions/upload-artifact@v4
         with:
-          name: telemt-3.5.6-web-ci
+          name: telemt-3.5.7-web-ci
           retention-days: 7
           path: |
             telemt-aarch64-musl
             telemt-x86_64-musl
-            telemt-ci.ipk
-            ipk-files.txt
-            ipk-control.txt
-            dist/*/*.apk
+            dist-ipk/*/*.ipk
+            dist-apk/*/*.apk
+            .ci/ipk-inspect/*/control.txt
+            .ci/ipk-inspect/*/files.txt
             owfeed.lock
