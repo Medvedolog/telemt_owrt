@@ -1,0 +1,186 @@
+name: Update WEB alpha1 assets from owfeed dev builds
+
+on:
+  push:
+    branches:
+      - telemt-3.5.6-web
+    paths:
+      - .github/workflows/update-web-alpha1-assets.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+  attestations: read
+
+jobs:
+  publish:
+    name: Replace alpha1 assets with owfeed builds
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: 3.5.6-web-alpha1
+      CORE_RUN_ID: '35311894280'
+      CORE_SHA: e7137356ea97e6b3f7a44517dec2f1918d2f68de
+      LUCI_SHA: a7d6a1aba9e8b4f5d780011faba8ea1fd918f8b5
+      VERSION: 3.5.7
+      ALPHA: 3.5.7-web-alpha1
+
+    steps:
+      - name: Checkout core dev branch
+        uses: actions/checkout@v4
+
+      - name: Assert exact core source SHA
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test "$(git rev-parse HEAD~1)" = "$CORE_SHA" || test "$(git rev-parse HEAD)" = "$CORE_SHA"
+
+      - name: Download exact green core owfeed artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p core-artifact
+          gh run download "$CORE_RUN_ID"             --repo Medvedolog/telemt_owrt             --name telemt-3.5.7-web-ci             --dir core-artifact
+          find core-artifact -type f -print | sort
+
+      - name: Checkout exact LuCI dev source
+        uses: actions/checkout@v4
+        with:
+          repository: Medvedolog/luci-app-telemt
+          ref: ${{ env.LUCI_SHA }}
+          path: luci-src
+
+      - name: Setup verified owfeed
+        uses: owfeed/owfeed/setup@v0.5.1
+        with:
+          version: v0.5.1
+
+      - name: Build LuCI IPK and APKv3 with owfeed
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cd luci-src
+          rm -rf .release-stage dist-ipk dist-apk
+          mkdir -p .release-stage/root
+          cp -a usr .release-stage/root/usr
+
+          cat > owfeed.yml <<'EOF'
+          version: 1
+          feed:
+            name: luci-app-telemt-alpha
+            url: https://example.invalid/luci-app-telemt-alpha
+            title: LuCI Telemt alpha
+            maintainer: "Medvedolog <noreply@example.invalid>"
+          publish:
+            - target: github-pages
+          releases:
+            - line: "25.12"
+              format: apk
+              default: true
+              arches: [aarch64_generic, aarch64_cortex-a53, x86_64]
+            - line: "24.10"
+              format: ipk
+              arches: [aarch64_generic, aarch64_cortex-a53, x86_64]
+          packages:
+            - name: luci-app-telemt
+              build: mkpkg
+              arch: noarch
+              version: 3.5.7-r1
+              files: ./.release-stage/root
+              description: "LuCI WebUI for Telemt 3.5.7 WEB alpha"
+              url: https://github.com/Medvedolog/luci-app-telemt
+              depends: [libc, luci-base, luci-compat, qrencode, ca-bundle]
+              scripts:
+                post-install: ./scripts/postinst
+                pre-deinstall: ./scripts/prerm
+                post-deinstall: ./scripts/postrm
+          EOF
+
+          owfeed lock --update
+          owfeed check
+          owfeed build --release 24.10 -o dist-ipk
+          owfeed build --release 25.12 -o dist-apk
+
+          test "$(find dist-ipk -type f -name '*.ipk' | wc -l)" -eq 1
+          test "$(find dist-apk -type f -name '*.apk' | wc -l)" -eq 1
+
+      - name: Assemble release assets
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -rf release-assets
+          mkdir -p release-assets
+
+          for arch in aarch64_generic aarch64_cortex-a53 x86_64; do
+            ipk="$(find "core-artifact/dist-ipk/$arch" -maxdepth 1 -type f -name '*.ipk' | head -n1)"
+            apk="$(find "core-artifact/dist-apk/$arch" -maxdepth 1 -type f -name '*.apk' | head -n1)"
+            test -s "$ipk"
+            test -s "$apk"
+            cp "$ipk" "release-assets/telemt_${ALPHA}_${arch}.ipk"
+            cp "$apk" "release-assets/telemt_${ALPHA}_${arch}.apk"
+          done
+
+          luci_ipk="$(find luci-src/dist-ipk -type f -name '*.ipk' | head -n1)"
+          luci_apk="$(find luci-src/dist-apk -type f -name '*.apk' | head -n1)"
+          test -s "$luci_ipk"
+          test -s "$luci_apk"
+          cp "$luci_ipk" "release-assets/luci-app-telemt_${ALPHA}_all.ipk"
+          cp "$luci_apk" "release-assets/luci-app-telemt_${ALPHA}_noarch.apk"
+
+          cd release-assets
+          sha256sum *.ipk *.apk | sort -k2 > SHA256SUMS
+          test "$(find . -maxdepth 1 -type f -name '*.ipk' | wc -l)" -eq 4
+          test "$(find . -maxdepth 1 -type f -name '*.apk' | wc -l)" -eq 4
+          sha256sum -c SHA256SUMS
+          ls -lh
+
+      - name: Replace assets in existing prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          gh release upload "$RELEASE_TAG" release-assets/*             --repo Medvedolog/telemt_owrt             --clobber
+
+      - name: Update prerelease notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cat > /tmp/release-notes.md <<'EOF'
+          ## Telemt 3.5.7 WEB Proxy — alpha 1
+
+          **Полная альфа для тестирования. Не stable.** Tag `3.5.6-web-alpha1` сохранён, но текущие пакеты собраны на upstream **Telemt 3.5.7**.
+
+          ### Важно про текущую пересборку
+          - **Все OpenWrt пакеты теперь собираются через owfeed**: и IPK для 24.10, и APKv3 для 25.12.
+          - Core: `aarch64_generic`, `aarch64_cortex-a53`, `x86_64`.
+          - LuCI: `all.ipk` для 24.10 и `noarch.apk` для 25.12.
+          - Исправлена загрузка CBI-модели на OpenWrt 24.10/ucodebridge: ошибка `attempt to call global 'Map' (a nil value)`.
+          - В LuCI доступен **Direct relay memory budget**: `0 = Auto (recommended)`, вручную `16–2048 MiB`.
+
+          ### WEB Proxy
+          - `https`, `https-lanes`, `websocket`, `websocket-lanes`;
+          - Fixed и Auto negotiation, ordered candidates, fallback, carrier learning;
+          - External / HAProxy / NGINX frontend;
+          - общая база Users/secrets для legacy и WEB;
+          - WEB links/QR в Users;
+          - WEB=off остаётся изолированным и не должен ломать Classic/DD/FakeTLS.
+
+          ### Что ставить
+          **OpenWrt 24.10:** core `.ipk` своей архитектуры + `luci-app-telemt_3.5.7-web-alpha1_all.ipk`.
+
+          **OpenWrt 25.12:** core `.apk` своей архитектуры + `luci-app-telemt_3.5.7-web-alpha1_noarch.apk`.
+
+          ### Просим тестировать
+          Нужны тесты на **OpenWrt 24.10 и 25.12**: обновление поверх существующей конфигурации, открытие LuCI на 24.10, Classic/DD/FakeTLS при WEB=off, все четыре WEB carrier, Auto/reconnect/media/idle-resume, External/HAProxy/NGINX и memory budget в Auto/ручном режиме.
+
+          При баге приложите версию OpenWrt/архитектуру, `uci show telemt`, `logread -e telemt` и `/tmp/etc/telemt.toml` без секретов.
+
+          `main` не изменён; пакеты собраны из dev-веток и exact green CI.
+          EOF
+
+          gh release edit "$RELEASE_TAG"             --repo Medvedolog/telemt_owrt             --title "Telemt 3.5.7 WEB Proxy alpha 1"             --notes-file /tmp/release-notes.md             --prerelease
