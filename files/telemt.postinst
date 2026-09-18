@@ -1,0 +1,76 @@
+#!/bin/sh
+# Idempotent Telemt 3.5.7 WEB UCI migration.
+# Never overwrite operator values; only create missing sections/options.
+
+set -eu
+
+has_section() {
+    uci -q show "telemt.$1" >/dev/null 2>&1
+}
+
+ensure_section() {
+    section="$1"
+    type="$2"
+    if ! has_section "$section"; then
+        uci -q set "telemt.$section=$type"
+    fi
+}
+
+ensure_option() {
+    section="$1"
+    option="$2"
+    value="$3"
+    if ! uci -q get "telemt.$section.$option" >/dev/null 2>&1; then
+        uci -q set "telemt.$section.$option=$value"
+    fi
+}
+
+ensure_list_value() {
+    section="$1"
+    option="$2"
+    value="$3"
+    current="$(uci -q get "telemt.$section.$option" 2>/dev/null || true)"
+    case " $current " in
+        *" $value "*) ;;
+        *) uci -q add_list "telemt.$section.$option=$value" ;;
+    esac
+}
+
+ensure_section web web
+ensure_option web enabled 0
+ensure_option web carrier_policy fixed
+ensure_option web carrier https
+ensure_list_value web carrier_candidate websocket-lanes
+ensure_list_value web carrier_candidate websocket
+ensure_list_value web carrier_candidate https-lanes
+ensure_option web carrier_learning 1
+ensure_option web carrier_negotiation_aggressiveness conservative
+ensure_option web memory_profile standard
+ensure_option web tls_terminator external
+ensure_option web haproxy_managed 0
+ensure_option web haproxy_bind :443
+ensure_option web haproxy_cert ""
+ensure_option web haproxy_key ""
+ensure_option web haproxy_auto_fw 1
+ensure_option web nginx_managed 0
+ensure_option web nginx_bind 443
+ensure_option web nginx_ipv6 0
+ensure_option web nginx_cert ""
+ensure_option web nginx_key ""
+ensure_option web nginx_auto_fw 1
+ensure_option web debug_enabled 0
+
+ensure_section web_listener web_listener
+ensure_option web_listener enabled 1
+ensure_option web_listener ip 127.0.0.1
+ensure_option web_listener port 27453
+ensure_option web_listener client_ip_source x_forwarded_for
+ensure_list_value web_listener trusted_proxy_cidr 127.0.0.1/32
+
+uci -q commit telemt
+
+# Clear LuCI caches so the newly created named WEB section is visible immediately.
+rm -f /tmp/luci-indexcache 2>/dev/null || true
+rm -f /tmp/luci-modulecache/* 2>/dev/null || true
+
+exit 0
