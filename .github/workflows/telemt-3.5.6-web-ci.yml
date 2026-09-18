@@ -166,7 +166,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          dos2unix files/telemt.init files/telemt.config files/telemt-web-check \
+          dos2unix files/telemt.init files/telemt.config files/telemt.postinst files/telemt-web-check \
             files/telemt-web-frontend files/telemt-web-nginx files/telemt-web-haproxy.hotplug
 
           rm -rf .ci/stage dist-ipk dist-apk
@@ -209,11 +209,13 @@ jobs:
             - name: telemt
               build: mkpkg
               arch: [aarch64_generic, aarch64_cortex-a53, x86_64]
-              version: 3.5.7-r1
+              version: 3.5.7-r2
               files: ./.ci/stage/{arch}
               description: "Telemt 3.5.7 WEB alpha test package"
               url: https://github.com/Medvedolog/telemt_owrt
               conffiles: ["/etc/config/telemt"]
+              scripts:
+                post-install: ./files/telemt.postinst
           EOF
 
       - name: Resolve and inspect owfeed plan
