@@ -29,11 +29,16 @@ jobs:
       - name: Checkout core dev branch
         uses: actions/checkout@v4
 
-      - name: Assert exact core source SHA
+      - name: Assert exact green core run
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euxo pipefail
-          test "$(git rev-parse HEAD~1)" = "$CORE_SHA" || test "$(git rev-parse HEAD)" = "$CORE_SHA"
+          run_sha="$(gh api "repos/Medvedolog/telemt_owrt/actions/runs/$CORE_RUN_ID" --jq .head_sha)"
+          run_conclusion="$(gh api "repos/Medvedolog/telemt_owrt/actions/runs/$CORE_RUN_ID" --jq .conclusion)"
+          test "$run_sha" = "$CORE_SHA"
+          test "$run_conclusion" = success
 
       - name: Download exact green core owfeed artifact
         env:
