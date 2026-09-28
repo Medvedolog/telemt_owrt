@@ -1,0 +1,20 @@
+#!/bin/sh
+# telemt pre-remove: hand managed frontends back, then stop the service.
+[ -z "${IPKG_INSTROOT:-}" ] || exit 0
+
+echo ""
+echo "================================================================="
+echo " Removing Headless Telemt package"
+echo "================================================================="
+if [ -x /usr/libexec/telemt-web-frontend ] && \
+   [ -f /etc/haproxy.cfg.telemt-backup ] && \
+   grep -qF '# TELEMT-MANAGED-HAPROXY v1' /etc/haproxy.cfg 2>/dev/null; then
+    /usr/libexec/telemt-web-frontend restore 2>/dev/null || true
+fi
+if [ -x /usr/libexec/telemt-web-nginx ] && \
+   grep -qF '# TELEMT-MANAGED-NGINX v1' /etc/nginx/conf.d/telemt-web.conf 2>/dev/null; then
+    /usr/libexec/telemt-web-nginx restore 2>/dev/null || true
+fi
+/etc/init.d/telemt disable 2>/dev/null || true
+/etc/init.d/telemt stop 2>/dev/null || true
+exit 0

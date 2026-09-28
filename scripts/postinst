@@ -1,6 +1,37 @@
 #!/bin/sh
-# Idempotent Telemt 3.5.8 WEB UCI migration.
-# Never overwrite operator values; only create missing sections/options.
+# telemt post-install: runs from the package manager on install and upgrade.
+#
+#   1. stop a stale daemon, retire the pre-UCI /etc/telemt directory
+#   2. migrate UCI: metrics/API ports, then the WEB sections (idempotent — only
+#      missing sections/options are created, operator values are never overwritten)
+#   3. fix permissions, enable and (re)start the service
+#
+# Nothing here may fail the install, so every external call is guarded.
+
+# Building an image: the target rootfs has no running system to talk to.
+[ -z "${IPKG_INSTROOT:-}" ] || exit 0
+
+echo ""
+echo "================================================================="
+echo " Installed Headless Telemt $(/usr/bin/telemt --version 2>/dev/null | head -n 1)"
+echo " Managed by procd via /etc/init.d/telemt"
+echo " LuCI package (optional): luci-app-telemt"
+echo "================================================================="
+
+if pidof telemt >/dev/null 2>&1; then
+    killall -9 telemt 2>/dev/null || true
+fi
+
+if [ -d "/etc/telemt" ]; then
+    mv /etc/telemt /etc/telemt.disabled_by_luci 2>/dev/null || true
+fi
+
+old_metrics="$(uci -q get telemt.general.metrics_port 2>/dev/null || true)"
+if [ "$old_metrics" = "9091" ] || [ "$old_metrics" = "9090" ]; then
+    uci -q set telemt.general.metrics_port='9092' || true
+    uci -q set telemt.general.api_port='9091' || true
+    uci -q commit telemt 2>/dev/null || true
+fi
 
 set -eu
 
@@ -74,5 +105,16 @@ uci -q commit telemt
 # Clear LuCI caches so the newly created named WEB section is visible immediately.
 rm -f /tmp/luci-indexcache 2>/dev/null || true
 rm -f /tmp/luci-modulecache/* 2>/dev/null || true
+
+chmod 0755 /usr/bin/telemt 2>/dev/null || true
+chmod 0755 /etc/init.d/telemt 2>/dev/null || true
+chmod 0755 /usr/libexec/telemt-web-check 2>/dev/null || true
+chmod 0755 /usr/libexec/telemt-web-frontend 2>/dev/null || true
+chmod 0755 /usr/libexec/telemt-web-nginx 2>/dev/null || true
+chmod 0755 /etc/hotplug.d/acme/95-telemt-web-haproxy 2>/dev/null || true
+chmod 0644 /etc/config/telemt 2>/dev/null || true
+
+/etc/init.d/telemt enable 2>/dev/null || true
+/etc/init.d/telemt restart 2>/dev/null || /etc/init.d/telemt start 2>/dev/null || true
 
 exit 0

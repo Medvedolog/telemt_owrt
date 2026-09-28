@@ -22,3 +22,11 @@ target
 
 proxy-secret
 .vscode/
+
+# owfeed build output and signing material
+/dist/
+/keys-setup/
+*.pem
+*.key
+!keys/*.pub.pem
+!keys/*.pub

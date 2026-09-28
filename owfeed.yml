@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://owfeed.org/schema/v1.json
+#
+# OpenWrt package definition for the headless telemt core.
+# owfeed builds native APKv3 packages for OpenWrt 25.12+ and IPK packages for 24.10
+# from the same per-architecture staged root filesystems (tools/stage.sh -> dist/).
+version: 1
+
+feed:
+  name: telemt
+  url: https://github.com/Medvedolog/telemt_owrt
+  title: telemt
+  maintainer: "Medvedolog <Medvedolog@github.com>"
+  homepage: https://github.com/Medvedolog/telemt_owrt
+
+releases:
+  - line: "25.12"
+    default: true
+    format: apk
+    arches: [aarch64_generic, aarch64_cortex-a53, x86_64]
+  - line: "24.10"
+    format: ipk
+    arches: [aarch64_generic, aarch64_cortex-a53, x86_64]
+
+# This repository publishes signed GitHub release assets, not its own feed.
+# A community feed can ingest the signed manifest and author-signed packages.
+publish:
+  - target: github-pages
+
+packages:
+  - name: telemt
+    build: mkpkg
+    arch: [aarch64_generic, aarch64_cortex-a53, x86_64]
+    version-from: file:./dist/VERSION
+    files: ./dist/stage/{arch}
+
+    description: "Advanced MTProto telemt proxy with FakeTLS and WEB Proxy support for OpenWrt. Headless core daemon with procd integration."
+    depends: [libc]
+    url: https://github.com/Medvedolog/telemt_owrt
+    maintainer: "Medvedolog <Medvedolog@github.com>"
+    repo-commit: env:GITHUB_SHA
+
+    # The UCI config is a conffile: upgrades keep the operator's edits, and
+    # scripts/postinst only adds sections/options that are missing.
+    conffiles: ["/etc/config/telemt"]
+
+    scripts:
+      post-install: ./dist/scripts/postinst
+      pre-deinstall: ./dist/scripts/prerm
+      post-deinstall: ./dist/scripts/postrm
