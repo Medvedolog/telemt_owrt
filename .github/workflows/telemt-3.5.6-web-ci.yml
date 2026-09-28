@@ -1,4 +1,4 @@
-name: Validate Telemt 3.5.7 WEB branch
+name: Validate Telemt 3.5.8 WEB branch
 
 on:
   push:
@@ -15,7 +15,7 @@ jobs:
       attestations: read
 
     env:
-      VERSION: '3.5.7'
+      VERSION: '3.5.8'
       UPSTREAM_REPO: telemt/telemt
       AARCH64_TARGET: aarch64-unknown-linux-musl
       AARCH64_OUT_BIN: telemt-aarch64-musl
@@ -50,6 +50,16 @@ jobs:
           grep -q 'direct_relay_buffer_budget_max_bytes = $direct_relay_buffer_budget_max_bytes' files/telemt.init
           grep -q 'config_get web_port web_listener port "27453"' files/telemt.init
 
+          # 3.5.8: WEB version gate and [web.debug] sideband (default off)
+          grep -q 'telemt_ver_ge 3 5 6' files/telemt.init
+          grep -q 'telemt_ver_ge 3 5 8' files/telemt.init
+          grep -q '^\[web.debug\]' files/telemt.init
+          grep -q 'sideband = ' files/telemt.init
+          grep -q 'capture_lifecycle = ' files/telemt.init
+          grep -q "option debug_sideband '0'" files/telemt.config
+          grep -q "option debug_capture_lifecycle '0'" files/telemt.config
+          grep -q 'ensure_option web debug_sideband 0' files/telemt.postinst
+
           grep -q 'https|https-lanes|websocket|websocket-lanes) ;;' files/telemt.init
           grep -q 'web_carrier="https"' files/telemt.init
           grep -q 'carrier = "$web_carrier"' files/telemt.init
@@ -78,11 +88,11 @@ jobs:
           fi
 
 
-      - name: Checkout upstream Telemt 3.5.7
+      - name: Checkout upstream Telemt 3.5.8
         uses: actions/checkout@v4
         with:
           repository: telemt/telemt
-          ref: 3.5.7
+          ref: 3.5.8
           path: upstream_src
 
       - name: Setup Rust
@@ -95,7 +105,7 @@ jobs:
         run: |
           set -euxo pipefail
           test -f upstream_src/Cargo.lock
-          grep -Fq 'version = "3.5.7"' upstream_src/Cargo.toml
+          grep -Fq 'version = "3.5.8"' upstream_src/Cargo.toml
           REQUIRED_RUST="$(sed -n 's/^rust-version = "\([^"]*\)"/\1/p' upstream_src/Cargo.toml | head -n1)"
           CURRENT_RUST="$(rustc --version | awk '{print $2}')"
           test -n "$REQUIRED_RUST"
@@ -123,7 +133,7 @@ jobs:
         with:
           version: v0.5.1
 
-      - name: Build aarch64 Telemt 3.5.7 locked
+      - name: Build aarch64 Telemt 3.5.8 locked
         shell: bash
         run: |
           set -euxo pipefail
@@ -214,9 +224,9 @@ jobs:
             - name: telemt
               build: mkpkg
               arch: [aarch64_generic, aarch64_cortex-a53, x86_64]
-              version: 3.5.7-r2
+              version: 3.5.8-r1
               files: ./.ci/stage/{arch}
-              description: "Telemt 3.5.7 WEB alpha test package"
+              description: "Telemt 3.5.8 WEB alpha test package"
               url: https://github.com/Medvedolog/telemt_owrt
               conffiles: ["/etc/config/telemt"]
               scripts:
@@ -260,7 +270,7 @@ jobs:
       - name: Upload CI packages
         uses: actions/upload-artifact@v4
         with:
-          name: telemt-3.5.7-web-ci
+          name: telemt-3.5.8-web-ci
           retention-days: 7
           path: |
             telemt-aarch64-musl

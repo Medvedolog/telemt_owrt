@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       build_target:
-        description: 'Enter upstream Telemt tag (e.g. 3.5.6)'
+        description: 'Enter upstream Telemt tag (e.g. 3.5.8)'
         required: true
-        default: '3.5.6'
+        default: '3.5.8'
 
 jobs:
   release:

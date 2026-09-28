@@ -1,7 +1,7 @@
 #!/bin/sh /etc/rc.common
 # ==============================================================================
 # Telemt init.d / procd service script
-# Version: 3.4.0 — external metrics/API bind, client_mss, mask_dynamic (telemt 3.4.18); requires telemt v3.4.15+
+# Version: 3.5.8 — WEB Proxy core, [web.debug] sideband (telemt 3.5.8); WEB requires telemt v3.5.6+, sideband requires v3.5.8+
 # ==============================================================================
 START=99
 STOP=10
@@ -24,6 +24,22 @@ is_cidr() {
 
 is_uint() {
     [ -n "$1" ] && echo "$1" | grep -qE '^[0-9]+$'
+}
+
+# telemt_ver_ge MAJOR MINOR PATCH -> 0 when the detected binary version
+# (from $VER_FILE) is >= the given one. Returns 2 when the version is unknown.
+telemt_ver_ge() {
+    local cur ma rest mi pa
+    cur="$(cat "$VER_FILE" 2>/dev/null)"
+    [ -n "$cur" ] || return 2
+    ma=${cur%%.*}; rest=${cur#*.}
+    mi=${rest%%.*}; pa=${rest#*.}; pa=${pa%%[!0-9]*}
+    is_uint "$ma" && is_uint "$mi" && is_uint "${pa:-x}" || return 2
+    [ "$ma" -gt "$1" ] && return 0
+    [ "$ma" -lt "$1" ] && return 1
+    [ "$mi" -gt "$2" ] && return 0
+    [ "$mi" -lt "$2" ] && return 1
+    [ "$pa" -ge "$3" ]
 }
 
 # Accept only the bind addresses the LuCI dropdown can produce.
@@ -151,6 +167,7 @@ generate_toml() {
     local web_trusted_toml web_vhost_count web_active_vhost_count web_generation_error
     local web_seen_vhosts web_seen_hosts web_current_vhost web_vhost_tmp
     local web_profiles_configured web_profiles_active
+    local web_debug_enabled web_debug_sideband web_debug_capture_lifecycle
 
     config_get mode general mode "tls"
     config_get port general port "8443"
@@ -182,6 +199,27 @@ generate_toml() {
 
     # --- Telemt 3.5.6 WEB core ---
     config_get_bool web_enabled web enabled 0
+    # WEB transport ([web], transport = "web") exists only in telemt >= 3.5.6.
+    # Unknown version (no version file yet) is allowed; a known older binary
+    # would reject the generated TOML, so fail early with a clear message.
+    if [ "$web_enabled" -eq 1 ]; then
+        telemt_ver_ge 3 5 6
+        if [ "$?" -eq 1 ]; then
+            logger -t telemt "Init: WEB is enabled but telemt binary $(cat "$VER_FILE" 2>/dev/null) is older than 3.5.6"
+            cleanup_tmp; return 1
+        fi
+    fi
+    # [web.debug] sideband diagnostics (telemt 3.5.8). Opt-in; sideband is off by default.
+    config_get_bool web_debug_enabled web debug_enabled 0
+    config_get_bool web_debug_sideband web debug_sideband 0
+    config_get_bool web_debug_capture_lifecycle web debug_capture_lifecycle 0
+    if [ "$web_debug_enabled" -eq 1 ]; then
+        telemt_ver_ge 3 5 8
+        if [ "$?" -ne 0 ]; then
+            logger -t telemt "Init: [web.debug] skipped (needs telemt >= 3.5.8, detected '$(cat "$VER_FILE" 2>/dev/null)')"
+            web_debug_enabled=0
+        fi
+    fi
     config_get web_carrier web carrier "https"
     case "$web_carrier" in
         https|https-lanes|websocket|websocket-lanes) ;;
@@ -786,6 +824,16 @@ TOML
             echo "carriers = [$web_carriers_toml]" >> "$TMP_CONF"
             [ "$web_carrier_learning" -eq 1 ] && echo "carrier_learning = true" >> "$TMP_CONF" || echo "carrier_learning = false" >> "$TMP_CONF"
             echo "carrier_negotiation_aggressiveness = \"$web_carrier_negotiation_aggressiveness\"" >> "$TMP_CONF"
+        fi
+        # [web.debug] is a sub-table of [web]: it must precede [[web.vhosts]] (toml-rs ordering).
+        if [ "$web_debug_enabled" -eq 1 ]; then
+            cat <<TOML >> "$TMP_CONF"
+
+[web.debug]
+enabled = true
+sideband = $([ "$web_debug_sideband" -eq 1 ] && echo true || echo false)
+capture_lifecycle = $([ "$web_debug_capture_lifecycle" -eq 1 ] && echo true || echo false)
+TOML
         fi
         cat "$TMP_WEB" >> "$TMP_CONF"
     fi
