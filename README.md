@@ -6,6 +6,7 @@
 </p>
 
 <p align="center">
+  <a href="#whats-new">Что нового</a> •
   <a href="#overview">Обзор</a> •
   <a href="#whats-included">Что внутри</a> •
   <a href="#why-this-build-exists">Зачем нужна эта сборка</a> •
@@ -15,6 +16,16 @@
   <a href="#installation">Установка</a> •
   <a href="#notes">Примечания</a>
 </p>
+
+<hr/>
+
+<h2 id="whats-new">🆕 Что нового в 3.5.8</h2>
+
+<ul>
+  <li>Telemt <b>3.5.8</b>, пакеты <code>telemt-3.5.8-r2</code> для OpenWrt 25.12 (APK) и 24.10 (IPK): <code>aarch64_generic</code>, <code>aarch64_cortex-a53</code>, <code>x86_64</code></li>
+  <li>WEB Proxy (выключен по умолчанию), <code>[web.debug]</code> со sideband-диагностикой (опционально)</li>
+  <li>Сборка и подписанные релизы через <b>owfeed</b> (<a href="RELEASING.md">RELEASING.md</a>); подробности — в <a href="CHANGELOG.md">CHANGELOG.md</a></li>
+</ul>
 
 <hr/>
 
@@ -184,7 +195,7 @@
 
 <ul>
   <li><code>telemt_&lt;version&gt;-rN_&lt;arch&gt;.ipk</code> — OpenWrt 24.10, архитектуры <code>aarch64_generic</code>, <code>aarch64_cortex-a53</code>, <code>x86_64</code></li>
-  <li><code>telemt-&lt;version&gt;-rN.apk</code> — OpenWrt 25.12, те же архитектуры</li>
+  <li><code>telemt-&lt;version&gt;-rN_&lt;arch&gt;.apk</code> — OpenWrt 25.12, те же архитектуры</li>
   <li><code>manifest.txt</code> и подписи</li>
 </ul>
 
@@ -208,7 +219,11 @@
 
 <h3>APK</h3>
 
-<pre><code>apk add --allow-untrusted ./telemt-&lt;version&gt;-rN.apk</code></pre>
+<pre><code>apk add --allow-untrusted ./telemt-&lt;version&gt;-rN_&lt;arch&gt;.apk</code></pre>
+
+<p>
+Пакеты подписаны ключами автора (<code>keys/</code>), поэтому для установки файлом на 25.12 нужен <code>--allow-untrusted</code>. Файлы берите из <a href="https://github.com/Medvedolog/telemt_owrt/releases">Releases</a>; ключи и подпись манифеста описаны в <a href="RELEASING.md">RELEASING.md</a>.
+</p>
 
 <h3>Управление сервисом</h3>
 
@@ -260,3 +275,5 @@
 
 ### 📋 English Summary
 **Headless Telemt for OpenWrt** is a highly optimized, headless packaging of the official Telegram MTProxy daemon (`telemt`) designed specifically for OpenWrt routers. Rather than forking the core binary, this project compiles the upstream Rust code for `aarch64-musl` with aggressive size optimizations (UPX, `opt-level=z`, `lto=true`) and pairs it with a completely rewritten `init.d` and UCI configuration layer. This custom integration solves real-world router issues like atomic config generation, safe hot-reloading, `procd` supervision, and memory constraints. The output includes ready-to-install IPK and APK packages. (Note: The LuCI WebUI is not included and must be installed as a separate module).
+
+**What's new in 3.5.8:** Telemt 3.5.8 packages (`telemt-3.5.8-r2`) for OpenWrt 25.12 (APK) and 24.10 (IPK) on `aarch64_generic`, `aarch64_cortex-a53` and `x86_64`; an optional WEB Proxy transport (off by default) with an opt-in `[web.debug]` sideband; signed releases built with owfeed. See [CHANGELOG.md](CHANGELOG.md) and [RELEASING.md](RELEASING.md). Install from the [Releases](https://github.com/Medvedolog/telemt_owrt/releases) page: `opkg install ./telemt_<version>-rN_<arch>.ipk` or `apk add --allow-untrusted ./telemt-<version>-rN_<arch>.apk`.
