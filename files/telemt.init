@@ -1,7 +1,7 @@
 #!/bin/sh /etc/rc.common
 # ==============================================================================
 # Telemt init.d / procd service script
-# Version: 3.4.0 — external metrics/API bind, client_mss, mask_dynamic (telemt 3.4.18); requires telemt v3.4.15+
+# Version: 3.5.8 — WEB Proxy core, [web.debug] sideband (telemt 3.5.8); WEB requires telemt v3.5.6+, sideband requires v3.5.8+
 # ==============================================================================
 START=99
 STOP=10
@@ -24,6 +24,22 @@ is_cidr() {
 
 is_uint() {
     [ -n "$1" ] && echo "$1" | grep -qE '^[0-9]+$'
+}
+
+# telemt_ver_ge MAJOR MINOR PATCH -> 0 when the detected binary version
+# (from $VER_FILE) is >= the given one. Returns 2 when the version is unknown.
+telemt_ver_ge() {
+    local cur ma rest mi pa
+    cur="$(cat "$VER_FILE" 2>/dev/null)"
+    [ -n "$cur" ] || return 2
+    ma=${cur%%.*}; rest=${cur#*.}
+    mi=${rest%%.*}; pa=${rest#*.}; pa=${pa%%[!0-9]*}
+    is_uint "$ma" && is_uint "$mi" && is_uint "${pa:-x}" || return 2
+    [ "$ma" -gt "$1" ] && return 0
+    [ "$ma" -lt "$1" ] && return 1
+    [ "$mi" -gt "$2" ] && return 0
+    [ "$mi" -lt "$2" ] && return 1
+    [ "$pa" -ge "$3" ]
 }
 
 # Accept only the bind addresses the LuCI dropdown can produce.
@@ -124,9 +140,10 @@ generate_toml() {
     local TMP_IPS=$(mktemp /tmp/telemt_ips.XXXXXX)
     local TMP_QUOTA=$(mktemp /tmp/telemt_quota.XXXXXX)
     local TMP_EXP=$(mktemp /tmp/telemt_exp.XXXXXX)
+    local TMP_WEB=$(mktemp /tmp/telemt_web.XXXXXX)
     local TMP_CONF=$(mktemp "$target_dir/${target_base}.tmp.XXXXXX")
 
-    cleanup_tmp() { rm -f "$TMP_LINKS" "$TMP_USERS" "$TMP_CONNS" "$TMP_IPS" "$TMP_QUOTA" "$TMP_EXP" "$TMP_CONF"; }
+    cleanup_tmp() { rm -f "$TMP_LINKS" "$TMP_USERS" "$TMP_CONNS" "$TMP_IPS" "$TMP_QUOTA" "$TMP_EXP" "$TMP_WEB" "$TMP_CONF" ${web_vhost_tmp:-}; }
 
     # --- Variable declarations ---
     local mode port api_port metrics_port ext_rt m_alo m_alan metrics_whitelist domain log_level
@@ -143,11 +160,29 @@ generate_toml() {
     local metrics_listen_addr api_listen_addr
     # 3.4.18 additions
     local client_mss mask_dynamic
+    local direct_relay_buffer_budget_max_mib direct_relay_buffer_budget_max_bytes
+    # 3.5.6 WEB core + vhosts/profiles
+    local web_enabled web_runtime_enabled web_listener_enabled web_ip web_port web_client_ip_source web_carrier
+    local web_carrier_policy web_carriers_toml web_carrier_learning web_carrier_negotiation_aggressiveness web_carrier_seen web_carrier_error
+    local web_trusted_toml web_vhost_count web_active_vhost_count web_generation_error
+    local web_seen_vhosts web_seen_hosts web_current_vhost web_vhost_tmp
+    local web_profiles_configured web_profiles_active
+    local web_debug_enabled web_debug_sideband web_debug_capture_lifecycle
 
     config_get mode general mode "tls"
     config_get port general port "8443"
     config_get metrics_port general metrics_port "9092"
     config_get api_port general api_port "9091"
+    config_get direct_relay_buffer_budget_max_mib general direct_relay_buffer_budget_max_mib "0"
+    if ! is_uint "$direct_relay_buffer_budget_max_mib"; then
+        logger -t telemt "Init: invalid direct_relay_buffer_budget_max_mib '$direct_relay_buffer_budget_max_mib'; using Auto"
+        direct_relay_buffer_budget_max_mib=0
+    fi
+    if [ "$direct_relay_buffer_budget_max_mib" -ne 0 ] && { [ "$direct_relay_buffer_budget_max_mib" -lt 16 ] || [ "$direct_relay_buffer_budget_max_mib" -gt 2048 ]; }; then
+        logger -t telemt "Init: direct_relay_buffer_budget_max_mib outside 16..2048; using Auto"
+        direct_relay_buffer_budget_max_mib=0
+    fi
+    direct_relay_buffer_budget_max_bytes=$((direct_relay_buffer_budget_max_mib * 1048576))
 
     is_uint "$port" || port=8443
     is_uint "$metrics_port" || metrics_port=9092
@@ -160,6 +195,331 @@ generate_toml() {
     if [ "$port" -eq "$api_port" ] || [ "$port" -eq "$metrics_port" ]; then
         logger -t telemt "Init: CRITICAL ERROR! Proxy port conflicts with API/Metrics."
         cleanup_tmp; return 1
+    fi
+
+    # --- Telemt 3.5.6 WEB core ---
+    config_get_bool web_enabled web enabled 0
+    # WEB transport ([web], transport = "web") exists only in telemt >= 3.5.6.
+    # Unknown version (no version file yet) is allowed; a known older binary
+    # would reject the generated TOML, so fail early with a clear message.
+    if [ "$web_enabled" -eq 1 ]; then
+        telemt_ver_ge 3 5 6
+        if [ "$?" -eq 1 ]; then
+            logger -t telemt "Init: WEB is enabled but telemt binary $(cat "$VER_FILE" 2>/dev/null) is older than 3.5.6"
+            cleanup_tmp; return 1
+        fi
+    fi
+    # [web.debug] sideband diagnostics (telemt 3.5.8). Opt-in; sideband is off by default.
+    config_get_bool web_debug_enabled web debug_enabled 0
+    config_get_bool web_debug_sideband web debug_sideband 0
+    config_get_bool web_debug_capture_lifecycle web debug_capture_lifecycle 0
+    if [ "$web_debug_enabled" -eq 1 ]; then
+        telemt_ver_ge 3 5 8
+        if [ "$?" -ne 0 ]; then
+            logger -t telemt "Init: [web.debug] skipped (needs telemt >= 3.5.8, detected '$(cat "$VER_FILE" 2>/dev/null)')"
+            web_debug_enabled=0
+        fi
+    fi
+    config_get web_carrier web carrier "https"
+    case "$web_carrier" in
+        https|https-lanes|websocket|websocket-lanes) ;;
+        *)
+            logger -t telemt "Init: invalid WEB carrier '$web_carrier'; using https"
+            web_carrier="https"
+            ;;
+    esac
+
+    config_get web_carrier_policy web carrier_policy "fixed"
+    case "$web_carrier_policy" in
+        fixed|auto) ;;
+        *)
+            logger -t telemt "Init: invalid WEB carrier_policy '$web_carrier_policy'; using fixed"
+            web_carrier_policy="fixed"
+            ;;
+    esac
+
+    web_carriers_toml=""
+    web_carrier_seen="|"
+    web_carrier_error=0
+    if [ "$web_enabled" -eq 1 ] && [ "$web_carrier_policy" = "auto" ]; then
+        add_web_carrier_candidate() {
+            local candidate="$1"
+            case "$candidate" in
+                https|https-lanes|websocket|websocket-lanes) ;;
+                *)
+                    logger -t telemt "Init: invalid WEB auto carrier candidate '$candidate'"
+                    web_carrier_error=1
+                    return 0
+                    ;;
+            esac
+            case "$web_carrier_seen" in
+                *"|$candidate|"*)
+                    logger -t telemt "Init: duplicate WEB auto carrier candidate '$candidate'"
+                    web_carrier_error=1
+                    return 0
+                    ;;
+            esac
+            web_carrier_seen="${web_carrier_seen}${candidate}|"
+            [ -n "$web_carriers_toml" ] && web_carriers_toml="${web_carriers_toml}, "
+            web_carriers_toml="${web_carriers_toml}\"${candidate}\""
+        }
+        config_list_foreach web carrier_candidate add_web_carrier_candidate
+        if [ "$web_carrier_error" -ne 0 ]; then
+            cleanup_tmp; return 1
+        fi
+        if [ -z "$web_carriers_toml" ]; then
+            logger -t telemt "Init: WEB auto carrier policy requires at least one carrier_candidate"
+            cleanup_tmp; return 1
+        fi
+        config_get_bool web_carrier_learning web carrier_learning 1
+        config_get web_carrier_negotiation_aggressiveness web carrier_negotiation_aggressiveness "conservative"
+        case "$web_carrier_negotiation_aggressiveness" in
+            conservative|balanced|aggressive) ;;
+            *)
+                logger -t telemt "Init: invalid WEB carrier negotiation aggressiveness '$web_carrier_negotiation_aggressiveness'; using conservative"
+                web_carrier_negotiation_aggressiveness="conservative"
+                ;;
+        esac
+    fi
+
+    config_get_bool web_listener_enabled web_listener enabled 1
+    config_get web_ip web_listener ip "127.0.0.1"
+    config_get web_port web_listener port "27453"
+    config_get web_client_ip_source web_listener client_ip_source "x_forwarded_for"
+    web_runtime_enabled=0
+
+    if [ "$web_enabled" -eq 1 ]; then
+        if [ "$web_listener_enabled" -ne 1 ]; then
+            logger -t telemt "Init: WEB is enabled but web_listener is disabled"
+            cleanup_tmp; return 1
+        fi
+        if ! is_uint "$web_port" || [ "$web_port" -lt 1 ] || [ "$web_port" -gt 65535 ]; then
+            logger -t telemt "Init: invalid WEB listener port '$web_port'"
+            cleanup_tmp; return 1
+        fi
+        if [ "$web_port" -eq "$port" ] || [ "$web_port" -eq "$api_port" ] || [ "$web_port" -eq "$metrics_port" ]; then
+            logger -t telemt "Init: WEB listener port conflicts with proxy/API/metrics port"
+            cleanup_tmp; return 1
+        fi
+        case "$web_ip" in
+            ""|*[!0-9A-Fa-f:.]*)
+                logger -t telemt "Init: invalid WEB listener IP '$web_ip'"
+                cleanup_tmp; return 1
+                ;;
+        esac
+        [ "$web_client_ip_source" = "x_forwarded_for" ] || web_client_ip_source="x_forwarded_for"
+
+        web_trusted_toml=""
+        add_web_trusted_proxy() {
+            local cidr="$1"
+            if ! is_cidr "$cidr"; then
+                logger -t telemt "Init: ignoring invalid WEB trusted proxy CIDR '$cidr'"
+                return 0
+            fi
+            case "$cidr" in
+                */0)
+                    logger -t telemt "Init: ignoring forbidden WEB trusted proxy CIDR '$cidr'"
+                    return 0
+                    ;;
+            esac
+            [ -n "$web_trusted_toml" ] && web_trusted_toml="${web_trusted_toml}, "
+            web_trusted_toml="${web_trusted_toml}\"$(sanitize_toml_value "$cidr")\""
+        }
+        config_list_foreach web_listener trusted_proxy_cidr add_web_trusted_proxy
+        if [ -z "$web_trusted_toml" ]; then
+            web_trusted_toml='"127.0.0.1/32"'
+            logger -t telemt "Init: WEB trusted proxy list empty; falling back to 127.0.0.1/32"
+        fi
+
+        # Build WEB vhosts/profiles into a temporary fragment first. This lets a
+        # disabled shared user remove its profile without ever leaving an invalid
+        # enabled vhost in the generated TOML.
+        web_vhost_count=0
+        web_active_vhost_count=0
+        web_generation_error=0
+        web_seen_vhosts="|"
+        web_seen_hosts="|"
+
+        handle_web_profile() {
+            local s="$1"
+            local p_en p_vhost p_user p_mode p_type p_user_en p_secret
+            local p_max_sessions p_max_streams p_max_streams_per_session
+
+            config_get_bool p_en "$s" enabled 1
+            [ "$p_en" -eq 1 ] || return 0
+            config_get p_vhost "$s" vhost ""
+            [ "$p_vhost" = "$web_current_vhost" ] || return 0
+
+            web_profiles_configured=$((web_profiles_configured + 1))
+            config_get p_user "$s" user ""
+            config_get p_mode "$s" secret_mode "dd"
+
+            case "$p_user" in
+                ""|*[!A-Za-z0-9_]*)
+                    logger -t telemt "Init: WEB profile '$s' has invalid shared user '$p_user'"
+                    web_generation_error=1; return 0
+                    ;;
+            esac
+            config_get p_type "$p_user" TYPE ""
+            if [ "$p_type" != "user" ]; then
+                logger -t telemt "Init: WEB profile '$s' references missing user '$p_user'"
+                web_generation_error=1; return 0
+            fi
+            config_get_bool p_user_en "$p_user" enabled 1
+            if [ "$p_user_en" -ne 1 ]; then
+                logger -t telemt "Init: WEB profile '$s' omitted because shared user '$p_user' is disabled"
+                return 0
+            fi
+            config_get p_secret "$p_user" secret ""
+            if [ -z "$p_secret" ]; then
+                logger -t telemt "Init: WEB profile '$s' references user '$p_user' without a secret"
+                web_generation_error=1; return 0
+            fi
+            case "$p_mode" in
+                plain|dd) ;;
+                *)
+                    logger -t telemt "Init: WEB profile '$s' has invalid secret_mode '$p_mode' (plain/dd only)"
+                    web_generation_error=1; return 0
+                    ;;
+            esac
+
+            config_get p_max_sessions "$s" max_sessions ""
+            config_get p_max_streams "$s" max_streams ""
+            config_get p_max_streams_per_session "$s" max_streams_per_session ""
+            for _web_limit in "$p_max_sessions" "$p_max_streams" "$p_max_streams_per_session"; do
+                [ -z "$_web_limit" ] && continue
+                if ! is_uint "$_web_limit" || [ "$_web_limit" -lt 1 ]; then
+                    logger -t telemt "Init: WEB profile '$s' contains an invalid positive limit"
+                    web_generation_error=1; return 0
+                fi
+            done
+
+            cat <<TOML >> "$web_vhost_tmp"
+
+[[web.vhosts.profiles]]
+user = "$p_user"
+secret_mode = "$p_mode"
+TOML
+            [ -n "$p_max_sessions" ] && echo "max_sessions = $p_max_sessions" >> "$web_vhost_tmp"
+            [ -n "$p_max_streams" ] && echo "max_streams = $p_max_streams" >> "$web_vhost_tmp"
+            [ -n "$p_max_streams_per_session" ] && echo "max_streams_per_session = $p_max_streams_per_session" >> "$web_vhost_tmp"
+            web_profiles_active=$((web_profiles_active + 1))
+        }
+
+        handle_web_vhost() {
+            local s="$1"
+            local vh_en vh_name vh_host vh_public_addr vh_decoy_mode vh_decoy_upstream
+
+            config_get_bool vh_en "$s" enabled 1
+            [ "$vh_en" -eq 1 ] || return 0
+            config_get vh_name "$s" name "$s"
+            config_get vh_host "$s" host ""
+            config_get vh_public_addr "$s" public_addr ""
+            config_get vh_decoy_mode "$s" decoy_mode "http_upstream"
+            config_get vh_decoy_upstream "$s" decoy_upstream ""
+
+            case "$vh_name" in
+                ""|*[!A-Za-z0-9_-]*)
+                    logger -t telemt "Init: WEB vhost '$s' has invalid name '$vh_name'"
+                    web_generation_error=1; return 0
+                    ;;
+            esac
+            case "$web_seen_vhosts" in
+                *"|$vh_name|"*)
+                    logger -t telemt "Init: duplicate WEB vhost name '$vh_name'"
+                    web_generation_error=1; return 0
+                    ;;
+            esac
+            if ! echo "$vh_host" | grep -qE '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' || ! echo "$vh_host" | grep -q '\.'; then
+                logger -t telemt "Init: WEB vhost '$vh_name' has invalid FQDN '$vh_host'"
+                web_generation_error=1; return 0
+            fi
+            vh_host=$(echo "$vh_host" | tr 'A-Z' 'a-z')
+            case "$web_seen_hosts" in
+                *"|$vh_host|"*)
+                    logger -t telemt "Init: duplicate WEB vhost host '$vh_host'"
+                    web_generation_error=1; return 0
+                    ;;
+            esac
+            if ! echo "$vh_public_addr" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}:443$|^\[[0-9A-Fa-f:]+\]:443$'; then
+                logger -t telemt "Init: WEB vhost '$vh_name' public_addr must be a concrete IP on :443"
+                web_generation_error=1; return 0
+            fi
+            if [ "$vh_decoy_mode" != "http_upstream" ]; then
+                logger -t telemt "Init: WEB decoy mode '$vh_decoy_mode' not enabled in this LAB"
+                web_generation_error=1; return 0
+            fi
+            if ! echo "$vh_decoy_upstream" | grep -qE '^http://(([0-9]{1,3}\.){3}[0-9]{1,3}|\[[0-9A-Fa-f:]+\])(:[0-9]{1,5})?$'; then
+                logger -t telemt "Init: WEB vhost '$vh_name' decoy must be an http:// IP-literal origin without path/query"
+                web_generation_error=1; return 0
+            fi
+
+            web_vhost_count=$((web_vhost_count + 1))
+            web_seen_vhosts="${web_seen_vhosts}${vh_name}|"
+            web_seen_hosts="${web_seen_hosts}${vh_host}|"
+            web_current_vhost="$vh_name"
+            web_profiles_configured=0
+            web_profiles_active=0
+            web_vhost_tmp=$(mktemp /tmp/telemt_web_vhost.XXXXXX)
+            if [ -z "$web_vhost_tmp" ]; then
+                logger -t telemt "Init: cannot allocate WEB vhost temporary file"
+                web_generation_error=1; return 0
+            fi
+
+            cat <<TOML > "$web_vhost_tmp"
+
+[[web.vhosts]]
+host = "$(sanitize_toml_value "$vh_host")"
+public_addr = "$(sanitize_toml_value "$vh_public_addr")"
+
+[web.vhosts.decoy]
+mode = "http_upstream"
+upstream = "$(sanitize_toml_value "$vh_decoy_upstream")"
+TOML
+            config_foreach handle_web_profile web_profile
+
+            if [ "$web_profiles_configured" -eq 0 ]; then
+                logger -t telemt "Init: WEB vhost '$vh_name' has no enabled profiles"
+                web_generation_error=1
+            elif [ "$web_profiles_active" -eq 0 ]; then
+                logger -t telemt "Init: WEB vhost '$vh_name' has no active profiles; omitting it until a shared user is enabled"
+            elif [ "$web_generation_error" -eq 0 ]; then
+                cat "$web_vhost_tmp" >> "$TMP_WEB"
+                web_active_vhost_count=$((web_active_vhost_count + 1))
+            fi
+            rm -f "$web_vhost_tmp"
+            web_vhost_tmp=""
+        }
+
+        validate_web_profile_vhost() {
+            local s="$1"
+            local p_en p_vhost
+            config_get_bool p_en "$s" enabled 1
+            [ "$p_en" -eq 1 ] || return 0
+            config_get p_vhost "$s" vhost ""
+            case "$web_seen_vhosts" in
+                *"|$p_vhost|"*) ;;
+                *)
+                    logger -t telemt "Init: WEB profile '$s' references missing/disabled vhost '$p_vhost'"
+                    web_generation_error=1
+                    ;;
+            esac
+        }
+
+        config_foreach handle_web_vhost web_vhost
+        config_foreach validate_web_profile_vhost web_profile
+        if [ "$web_vhost_count" -eq 0 ]; then
+            logger -t telemt "Init: WEB is enabled but no enabled web_vhost exists"
+            web_generation_error=1
+        fi
+        if [ "$web_generation_error" -ne 0 ]; then
+            cleanup_tmp; return 1
+        fi
+        if [ "$web_active_vhost_count" -gt 0 ]; then
+            web_runtime_enabled=1
+        else
+            logger -t telemt "Init: WEB configured but all shared-user profiles are disabled; runtime WEB remains off"
+        fi
     fi
 
     config_get_bool ext_rt general extended_runtime_enabled 1
@@ -341,6 +701,7 @@ fast_mode = true
 use_middle_proxy = $mp_str
 log_level = "$log_level"
 tg_connect = $tm_connect
+direct_relay_buffer_budget_max_bytes = $direct_relay_buffer_budget_max_bytes
 TOML
 
     # PATCH 3.3.22: data_path — runtime data directory
@@ -438,6 +799,43 @@ TOML
         echo "[[server.listeners]]" >> "$TMP_CONF"
         echo "ip = \"::\"" >> "$TMP_CONF"
         if [ -n "$announce_ip" ]; then echo "announce = \"$announce_ip\"" >> "$TMP_CONF"; fi
+    fi
+
+    # WEB is a separate application transport behind a trusted TLS terminator.
+    # Keep all WEB structure before the DYNAMIC marker so current reload logic
+    # treats WEB changes as restart-sensitive CORE changes.
+    if [ "$web_runtime_enabled" -eq 1 ]; then
+        cat <<TOML >> "$TMP_CONF"
+
+[[server.listeners]]
+ip = "$(sanitize_toml_value "$web_ip")"
+port = $web_port
+transport = "web"
+proxy_protocol = false
+reuse_allow = false
+web_client_ip_source = "$web_client_ip_source"
+web_trusted_proxy_cidrs = [$web_trusted_toml]
+
+[web]
+enabled = true
+carrier = "$web_carrier"
+TOML
+        if [ "$web_carrier_policy" = "auto" ]; then
+            echo "carriers = [$web_carriers_toml]" >> "$TMP_CONF"
+            [ "$web_carrier_learning" -eq 1 ] && echo "carrier_learning = true" >> "$TMP_CONF" || echo "carrier_learning = false" >> "$TMP_CONF"
+            echo "carrier_negotiation_aggressiveness = \"$web_carrier_negotiation_aggressiveness\"" >> "$TMP_CONF"
+        fi
+        # [web.debug] is a sub-table of [web]: it must precede [[web.vhosts]] (toml-rs ordering).
+        if [ "$web_debug_enabled" -eq 1 ]; then
+            cat <<TOML >> "$TMP_CONF"
+
+[web.debug]
+enabled = true
+sideband = $([ "$web_debug_sideband" -eq 1 ] && echo true || echo false)
+capture_lifecycle = $([ "$web_debug_capture_lifecycle" -eq 1 ] && echo true || echo false)
+TOML
+        fi
+        cat "$TMP_WEB" >> "$TMP_CONF"
     fi
 
     cat <<TOML >> "$TMP_CONF"
@@ -560,7 +958,7 @@ TOML
         [ -n "$u_scopes" ] && echo "scopes = \"$(sanitize_toml_value "$u_scopes")\"" >> "$TMP_CONF"
 
         if [ "$u_type" = "shadowsocks" ]; then
-            # Shadowsocks: url field (SIP002), no username/password
+            # Shadowsocks: url field (SIP002 format), no username/password
             echo "url = \"$(sanitize_toml_value "$u_url")\"" >> "$TMP_CONF"
             [ -n "$u_interface" ] && echo "interface = \"$(sanitize_toml_value "$u_interface")\"" >> "$TMP_CONF"
         elif [ "$u_type" != "direct" ]; then
@@ -656,12 +1054,18 @@ start_service() {
         return 0
     fi
 
-    # Smart Version detection (waterfall: --version → -V → strings → grep)
+    # Version detection: passive marker first. telemt_wrt appends the marker to
+    # the very end of packaged binaries, so the normal path reads only 512 bytes
+    # and does not exec the Rust binary just to discover its version.
     local ver=""
-    ver=$("$PROG" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
-    [ -z "$ver" ] && ver=$("$PROG" -V 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
-    [ -z "$ver" ] && command -v strings >/dev/null 2>&1 && ver=$(strings "$PROG" 2>/dev/null | grep -iE '^MTProxy v' | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+    ver=$(tail -c 512 "$PROG" 2>/dev/null | grep -a -oE 'MTProxy v[0-9]+\.[0-9]+\.[0-9]+' | tail -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+
+    # Legacy packaged binaries may contain the same marker away from the tail.
     [ -z "$ver" ] && ver=$(grep -a -m 1 -ioE 'MTProxy v[0-9]+\.[0-9]+\.[0-9]+' "$PROG" 2>/dev/null | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+
+    # Compatibility fallback for manually replaced/upstream binaries without our marker.
+    [ -z "$ver" ] && ver=$("$PROG" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+    [ -z "$ver" ] && ver=$("$PROG" -V 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
 
     if [ -n "$ver" ]; then
         echo "$ver" > "$VER_FILE"

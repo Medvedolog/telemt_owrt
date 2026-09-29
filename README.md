@@ -151,9 +151,9 @@
   <li>Сборка с настройками релиза, ориентированными на минимальный размер</li>
   <li>Сжатие итогового бинарника с помощью <b>UPX</b></li>
   <li>Добавление видимого маркера версии в бинарник</li>
-  <li>Нормализация shell-скриптов OpenWrt с помощью <b>dos2unix</b></li>
-  <li>Упаковка финальных артефактов через <b>nFPM</b> в IPK и APK</li>
-  <li>Публикация релизных ассетов в GitHub Releases</li>
+  <li>Проверка контрактов (<code>tools/check-sources.sh</code>) и подтверждение sha256 upstream-бинарника x86_64</li>
+  <li>Сборка IPK (24.10) и APKv3 (25.12) через <b>owfeed</b> из одного staged tree, проверка установки на реальном OpenWrt (<code>owlab</code>)</li>
+  <li>Подпись пакетов и manifest и публикация в GitHub Releases — см. <a href="RELEASING.md">RELEASING.md</a></li>
 </ol>
 
 <h3>Параметры релизного профиля Rust</h3>
@@ -183,11 +183,9 @@
 </p>
 
 <ul>
-  <li><code>telemt-aarch64-musl</code> — сырой автономный бинарник</li>
-  <li><code>telemt_&lt;version&gt;_aarch64_generic.ipk</code></li>
-  <li><code>telemt_&lt;version&gt;_aarch64_cortex-a53.ipk</code></li>
-  <li><code>telemt_&lt;version&gt;_aarch64_generic.apk</code></li>
-  <li><code>telemt_&lt;version&gt;_aarch64_cortex-a53.apk</code></li>
+  <li><code>telemt_&lt;version&gt;-rN_&lt;arch&gt;.ipk</code> — OpenWrt 24.10, архитектуры <code>aarch64_generic</code>, <code>aarch64_cortex-a53</code>, <code>x86_64</code></li>
+  <li><code>telemt-&lt;version&gt;-rN.apk</code> — OpenWrt 25.12, те же архитектуры</li>
+  <li><code>manifest.txt</code> и подписи</li>
 </ul>
 
 <p>
@@ -206,11 +204,11 @@
 
 <h3>IPK</h3>
 
-<pre><code>opkg install ./telemt_&lt;version&gt;_aarch64_generic.ipk</code></pre>
+<pre><code>opkg install ./telemt_&lt;version&gt;-rN_aarch64_generic.ipk</code></pre>
 
 <h3>APK</h3>
 
-<pre><code>apk add --allow-untrusted ./telemt_&lt;version&gt;_aarch64_generic.apk</code></pre>
+<pre><code>apk add --allow-untrusted ./telemt-&lt;version&gt;-rN.apk</code></pre>
 
 <h3>Управление сервисом</h3>
 

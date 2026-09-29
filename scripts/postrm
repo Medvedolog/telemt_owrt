@@ -1,0 +1,23 @@
+#!/bin/sh
+# telemt post-remove: clean generated runtime state.
+[ -z "${IPKG_INSTROOT:-}" ] || exit 0
+
+echo ""
+echo "================================================================="
+echo " Headless Telemt removed"
+echo " Cleaning generated runtime files"
+echo "================================================================="
+rm -f /var/etc/telemt.toml
+rm -f /var/etc/telemt.version
+if ! grep -qF '# TELEMT-MANAGED-HAPROXY v1' /etc/haproxy.cfg 2>/dev/null; then
+    rm -f /var/etc/telemt-haproxy.pem
+fi
+rm -f /tmp/etc/telemt.toml
+rm -f /tmp/telemt_stats.txt
+rm -rf /tmp/telemt-web-haproxy.lock /tmp/telemt-web-nginx.lock
+if uci -q get firewall.telemt_web_https >/dev/null 2>&1; then
+    uci -q delete firewall.telemt_web_https
+    uci commit firewall 2>/dev/null || true
+    /etc/init.d/firewall reload 2>/dev/null || true
+fi
+exit 0
