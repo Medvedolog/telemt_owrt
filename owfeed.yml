@@ -33,7 +33,7 @@ packages:
     version-from: file:./dist/VERSION
     files: ./dist/stage/{arch}
 
-    description: "Advanced MTProto telemt proxy with FakeTLS and WEB Proxy support for OpenWrt. Headless core daemon with procd integration."
+    description: "MTProto proxy server (telemt) for OpenWrt: procd service, UCI configuration, optional WEB transport with HAProxy/NGINX frontend helpers."
     depends: [libc]
     # Our integration (init, UCI, helpers) is MIT; the telemt binary is distributed
     # under the upstream TELEMT License 3.3, whose text ships in the package.
