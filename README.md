@@ -5,6 +5,18 @@
   <i>Собрано из официального репозитория <code>telemt/telemt</code> и адаптировано для реального использования на OpenWrt</i>
 </p>
 
+<blockquote>
+<p><b>⚠️ Требуются тестеры / Testers wanted</b></p>
+<p>
+Релиз <b>3.5.8</b> (включая WEB Proxy) прошёл автоматическую проверку сборки и установки в эмуляции OpenWrt, но <b>на реальных роутерах ещё не тестировался</b>. WEB по умолчанию выключен; основной риск — упаковка и обновление поверх старой версии.
+Если у вас есть роутер, установите пакет и сообщите результат в <a href="../../issues/new?template=test-report.md">Issues («Test report»)</a>: модель, архитектура, версия OpenWrt, версии пакетов, WEB вкл/выкл, что сработало и что нет, вывод <code>logread | grep telemt</code>.
+</p>
+<p>
+Release <b>3.5.8</b> (including the WEB Proxy) has passed automated build and install checks on emulated OpenWrt, but <b>has not been tested on real routers yet</b>. WEB is off by default; the main risk is packaging and upgrading over an older version.
+If you have a router, please install the package and report the result via <a href="../../issues/new?template=test-report.md">Issues ("Test report")</a>: model, architecture, OpenWrt version, package versions, WEB on/off, what worked and what did not, and the output of <code>logread | grep telemt</code>.
+</p>
+</blockquote>
+
 <p align="center">
   <a href="#whats-new">Что нового</a> •
   <a href="#overview">Обзор</a> •
