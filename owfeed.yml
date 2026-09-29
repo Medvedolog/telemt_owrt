@@ -35,6 +35,9 @@ packages:
 
     description: "Advanced MTProto telemt proxy with FakeTLS and WEB Proxy support for OpenWrt. Headless core daemon with procd integration."
     depends: [libc]
+    # Our integration (init, UCI, helpers) is MIT; the telemt binary is distributed
+    # under the upstream TELEMT License 3.3, whose text ships in the package.
+    license: MIT AND LicenseRef-TELEMT-3.3
     url: https://github.com/Medvedolog/telemt_owrt
     maintainer: "Medvedolog <Medvedolog@github.com>"
     repo-commit: env:GITHUB_SHA

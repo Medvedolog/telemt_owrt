@@ -128,7 +128,8 @@ jobs:
 
       - name: Stage packages
         run: |
-          AARCH64_BIN="$PWD/$AARCH64_OUT_BIN" X86_64_BIN="$PWD/$X86_64_OUT_BIN" ./tools/stage.sh
+          AARCH64_BIN="$PWD/$AARCH64_OUT_BIN" X86_64_BIN="$PWD/$X86_64_OUT_BIN" \
+            UPSTREAM_LICENSE="$PWD/upstream_src/LICENSE" ./tools/stage.sh
 
       - run: owfeed plan
       - run: owfeed check

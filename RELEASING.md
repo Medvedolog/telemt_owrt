@@ -70,7 +70,13 @@ SIG_KEY_ID="<id usign-ключа>"
 AUTO_MERGE="yes"
 ```
 
-Формат intake — внешний контракт: перед PR сверьтесь с актуальным `CONTRIBUTING.md` в owfeed-packages. Лицензия пакета в `owfeed.yml` не указана намеренно — задайте её по лицензии upstream, прежде чем подавать пакет в feed.
+Формат intake — внешний контракт: перед PR сверьтесь с актуальным `CONTRIBUTING.md` в owfeed-packages.
+
+## Лицензии
+
+- Обвязка этого репозитория (init.d, UCI, WEB-хелперы, скрипты, tooling) — **MIT** (`LICENSE`).
+- Бинарник `telemt` — работа авторов Telemt под **TELEMT License 3.3** (не копилефт): при распространении бинарников нужно сохранять текст лицензии и уведомления, изменённые версии нельзя выдавать за официальные. Поэтому `tools/stage.sh` кладёт в каждый пакет `/usr/share/licenses/telemt/` c `TELEMT-LICENSE` (копия `LICENSE` из checkout upstream), `LICENSE-openwrt-integration` и `NOTICE` (пакет неофициальный; в бинарник добавлен маркер версии, aarch64 собран из неизменённых исходников и сжат UPX).
+- В `owfeed.yml`: `license: MIT AND LicenseRef-TELEMT-3.3`.
 
 ## Локальная проверка
 

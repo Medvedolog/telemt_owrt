@@ -36,6 +36,12 @@ for ipk in dist/*/telemt_*.ipk; do
     tail -c 512 "$d/data/usr/bin/telemt" | grep -a -q "MTProxy v${BASE_VERSION}" || {
         echo "telemt binary in $ipk lacks the MTProxy v${BASE_VERSION} trailer" >&2; exit 1
     }
+    for f in TELEMT-LICENSE LICENSE-openwrt-integration NOTICE; do
+        [ -s "$d/data/usr/share/licenses/telemt/$f" ] || { echo "missing license file in $ipk: $f" >&2; exit 1; }
+    done
+    grep -qi 'TELEMT LICENSE' "$d/data/usr/share/licenses/telemt/TELEMT-LICENSE" || {
+        echo "TELEMT-LICENSE in $ipk is not the upstream license" >&2; exit 1
+    }
     for s in postinst prerm postrm; do
         [ -f "$d/control/$s" ] || { echo "maintainer script missing in $ipk: $s" >&2; exit 1; }
     done

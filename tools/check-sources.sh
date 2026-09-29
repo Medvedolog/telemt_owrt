@@ -63,4 +63,17 @@ if grep -R -n -E "option port '18080'|port = 18080|127\\.0\\.0\\.1:18080|127\\.0
   exit 1
 fi
 
+# Disabled WEB must stay isolated: strict carrier_candidate validation runs only
+# when WEB itself is enabled.
+grep -Fq 'if [ "$web_enabled" -eq 1 ] && [ "$web_carrier_policy" = "auto" ]; then' files/telemt.init
+
+# A second policy-only guard is expected only for TOML emission after
+# web_runtime_enabled has already gated the whole [web] block.
+test "$(grep -Fc 'if [ "$web_carrier_policy" = "auto" ]; then' files/telemt.init)" -eq 1
+
+# Keep the strict enabled-WEB behaviour intact.
+grep -Fq 'WEB auto carrier policy requires at least one carrier_candidate' files/telemt.init
+grep -Fq 'invalid WEB auto carrier candidate' files/telemt.init
+grep -Fq 'duplicate WEB auto carrier candidate' files/telemt.init
+
 echo 'source contracts ok'
