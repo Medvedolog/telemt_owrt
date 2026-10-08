@@ -3,6 +3,14 @@
 Формат версии пакета / package version: `X.Y.Z-rN`, где `X.Y.Z` — версия upstream Telemt, `rN` — ревизия упаковки.
 `X.Y.Z-rN`: `X.Y.Z` is the upstream Telemt version, `rN` is the packaging revision.
 
+## 3.5.14-r1 — RC preparation (unreleased, 2026-10-08)
+
+- Pin upstream Telemt **3.5.14** (six point releases / 31 upstream commits after 3.5.8). Binary sources are still taken directly from the upstream tag; no Rust fork.
+- Includes upstream ME pool convergence/recovery, conntrack recovery, and WEB transport improvements.
+- Preserve conservative OpenWrt policy: procd service, full TOML generated from UCI by init.d, existing restart decisions, and the existing forced shutdown on package upgrade.
+- On upgrade, restore an **absent** named `telemt.general` UCI section (disabled by default) without modifying existing user settings. Warn rather than silently rewriting an unexpected section type.
+- New WEB parameters are intentionally left to upstream defaults until separate UI/generator validation; no `base_path` link generation is enabled.
+
 ## 3.5.8-r2 — 2026-09-29
 
 **RU**
