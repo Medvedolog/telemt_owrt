@@ -72,6 +72,7 @@ ensure_list_value() {
 # If an old/broken upgrade left this section absent, LuCI otherwise renders
 # only its independent Upstreams/Users tables (reported in UI issue #25).
 # Restore ONLY the missing section; never replace operator options.
+# BEGIN_TESTABLE_GENERAL_MIGRATION
 if ! has_section general; then
     ensure_section general telemt
     ensure_option general enabled 0
@@ -81,6 +82,7 @@ fi
 if [ "$(uci -q get telemt.general 2>/dev/null || true)" != "telemt" ]; then
     logger -t telemt "Postinst: telemt.general has unexpected UCI type; inspect config before using LuCI"
 fi
+# END_TESTABLE_GENERAL_MIGRATION
 
 ensure_section web web
 ensure_option web enabled 0
