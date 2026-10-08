@@ -172,6 +172,8 @@ jobs:
             file /usr/bin/telemt
             file /etc/init.d/telemt
             file /etc/config/telemt
+            exec test "$(uci -q get telemt.general)" = telemt
+            exec test "$(uci -q get telemt.general.enabled)" = 0
             file /usr/libexec/telemt-web-check
             file /usr/libexec/telemt-web-frontend
             file /usr/libexec/telemt-web-nginx
@@ -191,6 +193,8 @@ jobs:
             file /usr/bin/telemt
             file /etc/init.d/telemt
             file /etc/config/telemt
+            exec test "$(uci -q get telemt.general)" = telemt
+            exec test "$(uci -q get telemt.general.enabled)" = 0
             file /usr/libexec/telemt-web-check
             file /usr/libexec/telemt-web-frontend
             file /usr/libexec/telemt-web-nginx
