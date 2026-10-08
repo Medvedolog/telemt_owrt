@@ -20,6 +20,7 @@ grep -q 'if ! has_section general; then' scripts/postinst
 grep -q 'ensure_section general telemt' scripts/postinst
 grep -q 'ensure_option general enabled 0' scripts/postinst
 grep -q 'unexpected UCI type' scripts/postinst
+sh tools/test-general-migration.sh
 
 grep -q 'ensure_section web web' scripts/postinst
 grep -q 'ensure_option web enabled 0' scripts/postinst
