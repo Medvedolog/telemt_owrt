@@ -67,6 +67,21 @@ ensure_list_value() {
     esac
 }
 
+# The main legacy LuCI model uses a named UCI section:
+# m:section(NamedSection, "general", "telemt").
+# If an old/broken upgrade left this section absent, LuCI otherwise renders
+# only its independent Upstreams/Users tables (reported in UI issue #25).
+# Restore ONLY the missing section; never replace operator options.
+if ! has_section general; then
+    ensure_section general telemt
+    ensure_option general enabled 0
+    logger -t telemt "Postinst: restored missing general UCI section (service remains disabled)"
+fi
+# A section with another type requires manual review, not silent replacement.
+if [ "$(uci -q get telemt.general 2>/dev/null || true)" != "telemt" ]; then
+    logger -t telemt "Postinst: telemt.general has unexpected UCI type; inspect config before using LuCI"
+fi
+
 ensure_section web web
 ensure_option web enabled 0
 ensure_option web carrier_policy fixed
