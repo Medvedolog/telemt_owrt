@@ -61,6 +61,10 @@ run_case() (
 run_case 0 missing '<unset>' 1 telemt 0 1 1
 # Existing operator-managed config must not be changed or reinitialized.
 run_case 1 telemt 1 1 telemt 1 0 0
+# An explicitly disabled existing service remains disabled.
+run_case 1 telemt 0 1 telemt 0 0 0
+# Existing section with unset enabled must not be overwritten.
+run_case 1 telemt '<unset>' 1 telemt '<unset>' 0 0
 # Wrong-type section is logged for review, never silently overwritten.
 run_case 1 wrong_type 1 1 wrong_type 1 0 0
 
