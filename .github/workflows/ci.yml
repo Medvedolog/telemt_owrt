@@ -236,9 +236,27 @@ jobs:
       - name: Full 3.5.8 -> 3.5.14 upgrade and UCI regression suite
         run: sh tools/test-upgrade-owlab.sh
 
+  runtime:
+    name: Generate TOML and start Telemt on OpenWrt (APK/IPK)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: owfeed-packages
+          path: dist/
+      - uses: owfeed/owlab/setup@v0.6.5
+        with:
+          version: v0.6.5
+      - name: Direct/ME/WEB generated TOML and procd smoke
+        run: sh tools/test-runtime-owlab.sh
+
   release-preflight:
     name: Release signing preflight
-    needs: [build, verify, upgrade]
+    needs: [build, verify, upgrade, runtime]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
