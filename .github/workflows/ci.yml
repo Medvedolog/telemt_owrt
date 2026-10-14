@@ -301,6 +301,8 @@ jobs:
             --assert 'exec test "$(uci -q get telemt.general)" = telemt' \
             --assert 'http 200 /cgi-bin/luci/admin/services/telemt' \
             --assert 'http 200 /cgi-bin/luci/admin/services/telemt/web'
+      - name: Missing/wrong-type general renders diagnostic without UCI writes
+        run: sh tools/test-luci-general-owlab.sh
 
   release-preflight:
     name: Release signing preflight

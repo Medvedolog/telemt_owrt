@@ -25,6 +25,8 @@ sh tools/test-port-migration.sh
 python3 tools/test-regressions.py
 sh -n tools/test-upgrade-owlab.sh
 sh -n tools/test-runtime-owlab.sh
+sh -n tools/test-luci-general-owlab.sh
+python3 -m py_compile tools/test-luci-general-http.py
 python3 -m py_compile tools/test-runtime-toml.py
 for fixture in tools/fixtures/upgrade-*.sh; do sh -n "$fixture"; done
 

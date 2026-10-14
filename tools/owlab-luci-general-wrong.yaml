@@ -1,0 +1,23 @@
+version: 1
+project:
+  name: telemt-luci-general-wrong
+  install:
+    fixtures/luci-smoke: /tmp/telemt-luci-smoke
+  post_sync: |
+    uci -q set telemt.ci_probe=user
+    uci -q set telemt.ci_probe.secret=0123456789abcdef0123456789abcdef
+    uci -q set telemt.general=incorrect_type
+    uci -q commit telemt
+    rm -f /tmp/luci-indexcache
+    rm -f /tmp/luci-modulecache/*
+defaults:
+  fidelity: basic
+  arch: x86_64
+  fixtures: [none]
+routers:
+  - id: general-2410
+    release: "24.10.8"
+    ports: { http: 18480, ssh: 18482 }
+  - id: general-2512
+    release: "25.12.5"
+    ports: { http: 18481, ssh: 18483 }
