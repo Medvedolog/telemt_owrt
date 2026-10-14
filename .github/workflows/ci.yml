@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+# Cancel obsolete PR builds after new commits; never cancel tag releases.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 env:
   UPSTREAM_REPO: telemt/telemt
   AARCH64_TARGET: aarch64-unknown-linux-musl
@@ -27,6 +32,8 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - run: bash tools/check-sources.sh
+      - name: Regression checks (UCI / LuCI contracts)
+        run: python3 tools/test-regressions.py
 
   build:
     name: Build native OpenWrt packages
@@ -172,6 +179,8 @@ jobs:
             file /usr/bin/telemt
             file /etc/init.d/telemt
             file /etc/config/telemt
+            exec test "$(uci -q get telemt.general)" = telemt
+            exec test "$(uci -q get telemt.general.enabled)" = 0
             file /usr/libexec/telemt-web-check
             file /usr/libexec/telemt-web-frontend
             file /usr/libexec/telemt-web-nginx
@@ -191,6 +200,8 @@ jobs:
             file /usr/bin/telemt
             file /etc/init.d/telemt
             file /etc/config/telemt
+            exec test "$(uci -q get telemt.general)" = telemt
+            exec test "$(uci -q get telemt.general.enabled)" = 0
             file /usr/libexec/telemt-web-check
             file /usr/libexec/telemt-web-frontend
             file /usr/libexec/telemt-web-nginx
@@ -199,9 +210,103 @@ jobs:
             exec uci -q get telemt.web.enabled | grep -qx 0
             exec uci -q get telemt.web_listener.port | grep -qx 27453
 
+  upgrade:
+    name: Upgrade UCI fixtures on OpenWrt (APK/IPK)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: owfeed-packages
+          path: dist/
+      - uses: owfeed/owlab/setup@v0.6.5
+        with:
+          version: v0.6.5
+      - name: Fetch pinned 3.5.8-r2 baseline APK/IPK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist/previous
+          gh release download 3.5.8-2 --repo Medvedolog/telemt_owrt --dir dist/previous \
+            --pattern 'telemt_3.5.8-r2_x86_64.ipk' \
+            --pattern 'telemt-3.5.8-r2_x86_64.apk'
+      - name: Full 3.5.8 -> 3.5.14 upgrade and UCI regression suite
+        run: sh tools/test-upgrade-owlab.sh
+
+  runtime:
+    name: Generate TOML and start Telemt on OpenWrt (APK/IPK)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: owfeed-packages
+          path: dist/
+      - uses: owfeed/owlab/setup@v0.6.5
+        with:
+          version: v0.6.5
+      - name: Direct/ME/WEB generated TOML and procd smoke
+        run: sh tools/test-runtime-owlab.sh
+
+  paired-luci:
+    name: Paired RC core + LuCI on OpenWrt (APK/IPK)
+    needs: build
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: owfeed-packages
+          path: dist/
+      - name: Checkout paired LuCI 3.5.14 RC
+        uses: actions/checkout@v4
+        with:
+          repository: Medvedolog/luci-app-telemt
+          ref: dev/telemt-luci-3.5.14-rc-prep
+          path: luci_src
+          persist-credentials: false
+      - name: Require matching core/LuCI base version
+        run: test "$(cat version.txt)" = "$(cat luci_src/version.txt)"
+      - uses: owfeed/owfeed/setup@v0.5.1
+        with:
+          version: v0.5.1
+      - name: Build matching native LuCI packages
+        run: |
+          set -eu
+          cd luci_src
+          ./tools/stage.sh
+          owfeed plan
+          owfeed check
+          owfeed build
+          sh tools/check-package.sh
+      - uses: owfeed/owlab/setup@v0.6.5
+        with:
+          version: v0.6.5
+      - name: Authenticate and render LuCI with RC core installed
+        run: |
+          owlab test --release 25.12.5 --release 24.10.8 --arch x86_64 \
+            --install 'dist/x86_64/telemt*' \
+            --install 'luci_src/dist/*/luci-app-telemt*' \
+            --assert 'package telemt' \
+            --assert 'package luci-app-telemt' \
+            --assert 'exec test "$(uci -q get telemt.general)" = telemt' \
+            --assert 'http 200 /cgi-bin/luci/admin/services/telemt' \
+            --assert 'http 200 /cgi-bin/luci/admin/services/telemt/web'
+      - name: Missing/wrong-type general renders diagnostic without UCI writes
+        run: sh tools/test-luci-general-owlab.sh
+
   release-preflight:
     name: Release signing preflight
-    needs: [build, verify]
+    needs: [build, verify, upgrade, runtime]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:

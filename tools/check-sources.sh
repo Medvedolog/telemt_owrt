@@ -14,6 +14,22 @@ done
 # One base version in version.txt: bare X.Y.Z.
 grep -qxE '[0-9]+\.[0-9]+\.[0-9]+' version.txt
 
+# Legacy LuCI needs the named 'general' section even on upgraded installations.
+# Only recreate an absent section; never overwrite an existing section or its options.
+grep -q 'if ! has_section general; then' scripts/postinst
+grep -q 'ensure_section general telemt' scripts/postinst
+grep -q 'ensure_option general enabled 0' scripts/postinst
+grep -q 'unexpected UCI type' scripts/postinst
+sh tools/test-general-migration.sh
+sh tools/test-port-migration.sh
+python3 tools/test-regressions.py
+sh -n tools/test-upgrade-owlab.sh
+sh -n tools/test-runtime-owlab.sh
+sh -n tools/test-luci-general-owlab.sh
+python3 -m py_compile tools/test-luci-general-http.py
+python3 -m py_compile tools/test-runtime-toml.py
+for fixture in tools/fixtures/upgrade-*.sh; do sh -n "$fixture"; done
+
 grep -q 'ensure_section web web' scripts/postinst
 grep -q 'ensure_option web enabled 0' scripts/postinst
 grep -q 'ensure_section web_listener web_listener' scripts/postinst

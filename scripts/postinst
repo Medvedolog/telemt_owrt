@@ -26,12 +26,16 @@ if [ -d "/etc/telemt" ]; then
     mv /etc/telemt /etc/telemt.disabled_by_luci 2>/dev/null || true
 fi
 
+# Preserve explicit operator port choices. A legacy metrics port may
+# overlap the API listener; report it rather than silently rewriting both.
+# BEGIN_TESTABLE_PORT_MIGRATION
 old_metrics="$(uci -q get telemt.general.metrics_port 2>/dev/null || true)"
-if [ "$old_metrics" = "9091" ] || [ "$old_metrics" = "9090" ]; then
-    uci -q set telemt.general.metrics_port='9092' || true
-    uci -q set telemt.general.api_port='9091' || true
-    uci -q commit telemt 2>/dev/null || true
+old_api="$(uci -q get telemt.general.api_port 2>/dev/null || true)"
+[ -n "$old_api" ] || old_api=9091
+if [ -n "$old_metrics" ] && [ "$old_metrics" = "$old_api" ]; then
+    logger -t telemt "Postinst: metrics_port and api_port both use $old_metrics; resolve the listener conflict manually"
 fi
+# END_TESTABLE_PORT_MIGRATION
 
 set -eu
 
@@ -60,20 +64,40 @@ ensure_list_value() {
     section="$1"
     option="$2"
     value="$3"
-    current="$(uci -q get "telemt.$section.$option" 2>/dev/null || true)"
-    case " $current " in
-        *" $value "*) ;;
-        *) uci -q add_list "telemt.$section.$option=$value" ;;
-    esac
+    # A pre-existing list is operator state, not a place to append defaults.
+    if ! uci -q get "telemt.$section.$option" >/dev/null 2>&1; then
+        uci -q add_list "telemt.$section.$option=$value"
+    fi
 }
+
+# The main legacy LuCI model uses a named UCI section:
+# m:section(NamedSection, "general", "telemt").
+# If an old/broken upgrade left this section absent, LuCI otherwise renders
+# only its independent Upstreams/Users tables (reported in UI issue #25).
+# Restore ONLY the missing section; never replace operator options.
+# BEGIN_TESTABLE_GENERAL_MIGRATION
+if ! has_section general; then
+    ensure_section general telemt
+    ensure_option general enabled 0
+    logger -t telemt "Postinst: restored missing general UCI section (service remains disabled)"
+fi
+# A section with another type requires manual review, not silent replacement.
+if [ "$(uci -q get telemt.general 2>/dev/null || true)" != "telemt" ]; then
+    logger -t telemt "Postinst: telemt.general has unexpected UCI type; inspect config before using LuCI"
+fi
+# END_TESTABLE_GENERAL_MIGRATION
 
 ensure_section web web
 ensure_option web enabled 0
 ensure_option web carrier_policy fixed
 ensure_option web carrier https
-ensure_list_value web carrier_candidate websocket-lanes
-ensure_list_value web carrier_candidate websocket
-ensure_list_value web carrier_candidate https-lanes
+# Seed the default carrier list only as a unit. Never append default carriers
+# to an operator-managed priority/allow-list during an upgrade.
+if ! uci -q get telemt.web.carrier_candidate >/dev/null 2>&1; then
+    uci -q add_list telemt.web.carrier_candidate=websocket-lanes
+    uci -q add_list telemt.web.carrier_candidate=websocket
+    uci -q add_list telemt.web.carrier_candidate=https-lanes
+fi
 ensure_option web carrier_learning 1
 ensure_option web carrier_negotiation_aggressiveness conservative
 ensure_option web memory_profile standard
