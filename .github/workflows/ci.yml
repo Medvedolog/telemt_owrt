@@ -254,6 +254,54 @@ jobs:
       - name: Direct/ME/WEB generated TOML and procd smoke
         run: sh tools/test-runtime-owlab.sh
 
+  paired-luci:
+    name: Paired RC core + LuCI on OpenWrt (APK/IPK)
+    needs: build
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: owfeed-packages
+          path: dist/
+      - name: Checkout paired LuCI 3.5.14 RC
+        uses: actions/checkout@v4
+        with:
+          repository: Medvedolog/luci-app-telemt
+          ref: dev/telemt-luci-3.5.14-rc-prep
+          path: luci_src
+          persist-credentials: false
+      - name: Require matching core/LuCI base version
+        run: test "$(cat version.txt)" = "$(cat luci_src/version.txt)"
+      - uses: owfeed/owfeed/setup@v0.5.1
+        with:
+          version: v0.5.1
+      - name: Build matching native LuCI packages
+        run: |
+          set -eu
+          cd luci_src
+          ./tools/stage.sh
+          owfeed plan
+          owfeed check
+          owfeed build
+          sh tools/check-package.sh
+      - uses: owfeed/owlab/setup@v0.6.5
+        with:
+          version: v0.6.5
+      - name: Authenticate and render LuCI with RC core installed
+        run: |
+          owlab test --release 25.12.5 --release 24.10.8 --arch x86_64 \
+            --install 'dist/x86_64/telemt*' \
+            --install 'luci_src/dist/*/luci-app-telemt*' \
+            --assert 'package telemt' \
+            --assert 'package luci-app-telemt' \
+            --assert 'exec test "$(uci -q get telemt.general)" = telemt' \
+            --assert 'http 200 /cgi-bin/luci/admin/services/telemt' \
+            --assert 'http 200 /cgi-bin/luci/admin/services/telemt/web'
+
   release-preflight:
     name: Release signing preflight
     needs: [build, verify, upgrade, runtime]
