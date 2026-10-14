@@ -31,6 +31,7 @@ fi
 # BEGIN_TESTABLE_PORT_MIGRATION
 old_metrics="$(uci -q get telemt.general.metrics_port 2>/dev/null || true)"
 old_api="$(uci -q get telemt.general.api_port 2>/dev/null || true)"
+[ -n "$old_api" ] || old_api=9091
 if [ -n "$old_metrics" ] && [ "$old_metrics" = "$old_api" ]; then
     logger -t telemt "Postinst: metrics_port and api_port both use $old_metrics; resolve the listener conflict manually"
 fi
