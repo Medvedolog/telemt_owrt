@@ -27,6 +27,8 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - run: bash tools/check-sources.sh
+      - name: Regression checks (UCI / LuCI contracts)
+        run: python3 tools/test-regressions.py
 
   build:
     name: Build native OpenWrt packages
