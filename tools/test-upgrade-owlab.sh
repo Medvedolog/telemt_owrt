@@ -10,15 +10,17 @@ owlab --config "$config" up
 
 for router in upgrade-ipk upgrade-apk; do
     case "$router" in
-        upgrade-ipk) set -- dist/x86_64/telemt_*.ipk ;;
-        upgrade-apk) set -- dist/x86_64/telemt-*.apk ;;
+        upgrade-ipk) previous="dist/previous/telemt_3.5.8-r2_x86_64.ipk"; set -- dist/x86_64/telemt_*.ipk ;;
+        upgrade-apk) previous="dist/previous/telemt-3.5.8-r2_x86_64.apk"; set -- dist/x86_64/telemt-*.apk ;;
     esac
     [ "$#" -eq 1 ] && [ -f "$1" ] || {
         echo "Expected exactly one built core package for $router" >&2
         exit 1
     }
     package="$1"
-    echo "Testing $router: seed old config -> package install -> postinst twice"
+    [ -f "$previous" ] || { echo "Missing baseline package: $previous" >&2; exit 1; }
+    echo "Testing $router: 3.5.8-r2 -> seeded UCI -> 3.5.14 upgrade -> postinst twice"
+    owlab --config "$config" install "$router" "$previous"
     owlab --config "$config" exec "$router" -- sh -s < tools/fixtures/upgrade-seed.sh
     owlab --config "$config" install "$router" "$package"
     owlab --config "$config" exec "$router" -- sh -s < tools/fixtures/upgrade-assert.sh
