@@ -18,10 +18,12 @@ uci -q set telemt.ci_socks.address=127.0.0.1:1080
 uci -q set telemt.web=web
 uci -q set telemt.web.enabled=0
 uci -q set telemt.web.carrier=websocket
+uci -q delete telemt.web.carrier_candidate || true
 uci -q add_list telemt.web.carrier_candidate=https
 uci -q set telemt.web_listener=web_listener
 uci -q set telemt.web_listener.port=28653
 uci -q set telemt.web_listener.ip=127.0.0.1
+uci -q delete telemt.web_listener.trusted_proxy_cidr || true
 uci -q add_list telemt.web_listener.trusted_proxy_cidr=10.10.0.0/16
 uci -q set telemt.ci_vhost=web_vhost
 uci -q set telemt.ci_vhost.hostname=proxy.example.invalid
