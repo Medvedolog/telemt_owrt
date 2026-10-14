@@ -64,11 +64,10 @@ ensure_list_value() {
     section="$1"
     option="$2"
     value="$3"
-    current="$(uci -q get "telemt.$section.$option" 2>/dev/null || true)"
-    case " $current " in
-        *" $value "*) ;;
-        *) uci -q add_list "telemt.$section.$option=$value" ;;
-    esac
+    # A pre-existing list is operator state, not a place to append defaults.
+    if ! uci -q get "telemt.$section.$option" >/dev/null 2>&1; then
+        uci -q add_list "telemt.$section.$option=$value"
+    fi
 }
 
 # The main legacy LuCI model uses a named UCI section:
@@ -92,9 +91,13 @@ ensure_section web web
 ensure_option web enabled 0
 ensure_option web carrier_policy fixed
 ensure_option web carrier https
-ensure_list_value web carrier_candidate websocket-lanes
-ensure_list_value web carrier_candidate websocket
-ensure_list_value web carrier_candidate https-lanes
+# Seed the default carrier list only as a unit. Never append default carriers
+# to an operator-managed priority/allow-list during an upgrade.
+if ! uci -q get telemt.web.carrier_candidate >/dev/null 2>&1; then
+    uci -q add_list telemt.web.carrier_candidate=websocket-lanes
+    uci -q add_list telemt.web.carrier_candidate=websocket
+    uci -q add_list telemt.web.carrier_candidate=https-lanes
+fi
 ensure_option web carrier_learning 1
 ensure_option web carrier_negotiation_aggressiveness conservative
 ensure_option web memory_profile standard
