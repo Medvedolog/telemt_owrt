@@ -29,6 +29,7 @@ run_case() (
 run_case 9090 9091 0
 run_case 9091 9092 0
 run_case 9091 9091 1
+run_case 9091 '' 1
 run_case 9001 9002 0
 run_case 9001 9001 1
 run_case '' '' 0
