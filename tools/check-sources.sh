@@ -23,6 +23,8 @@ grep -q 'unexpected UCI type' scripts/postinst
 sh tools/test-general-migration.sh
 sh tools/test-port-migration.sh
 python3 tools/test-regressions.py
+sh -n tools/test-upgrade-owlab.sh
+for fixture in tools/fixtures/upgrade-*.sh; do sh -n "$fixture"; done
 
 grep -q 'ensure_section web web' scripts/postinst
 grep -q 'ensure_option web enabled 0' scripts/postinst

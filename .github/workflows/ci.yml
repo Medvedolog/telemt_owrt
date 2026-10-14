@@ -205,6 +205,24 @@ jobs:
             exec uci -q get telemt.web.enabled | grep -qx 0
             exec uci -q get telemt.web_listener.port | grep -qx 27453
 
+  upgrade:
+    name: Upgrade UCI fixtures on OpenWrt (APK/IPK)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: owfeed-packages
+          path: dist/
+      - uses: owfeed/owlab/setup@v0.6.5
+        with:
+          version: v0.6.5
+      - name: Package install, repeated postinst, missing/wrong general
+        run: sh tools/test-upgrade-owlab.sh
+
   release-preflight:
     name: Release signing preflight
     needs: [build, verify]

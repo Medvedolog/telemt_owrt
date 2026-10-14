@@ -1,0 +1,10 @@
+version: 1
+defaults:
+  fidelity: basic
+  arch: x86_64
+  fixtures: [none]
+routers:
+  - id: upgrade-apk
+    release: "25.12.5"
+  - id: upgrade-ipk
+    release: "24.10.8"
