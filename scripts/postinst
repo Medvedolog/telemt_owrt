@@ -26,12 +26,15 @@ if [ -d "/etc/telemt" ]; then
     mv /etc/telemt /etc/telemt.disabled_by_luci 2>/dev/null || true
 fi
 
+# Preserve explicit operator port choices. A legacy metrics port may
+# overlap the API listener; report it rather than silently rewriting both.
+# BEGIN_TESTABLE_PORT_MIGRATION
 old_metrics="$(uci -q get telemt.general.metrics_port 2>/dev/null || true)"
-if [ "$old_metrics" = "9091" ] || [ "$old_metrics" = "9090" ]; then
-    uci -q set telemt.general.metrics_port='9092' || true
-    uci -q set telemt.general.api_port='9091' || true
-    uci -q commit telemt 2>/dev/null || true
+old_api="$(uci -q get telemt.general.api_port 2>/dev/null || true)"
+if [ -n "$old_metrics" ] && [ "$old_metrics" = "$old_api" ]; then
+    logger -t telemt "Postinst: metrics_port and api_port both use $old_metrics; resolve the listener conflict manually"
 fi
+# END_TESTABLE_PORT_MIGRATION
 
 set -eu
 
