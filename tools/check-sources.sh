@@ -21,6 +21,7 @@ grep -q 'ensure_section general telemt' scripts/postinst
 grep -q 'ensure_option general enabled 0' scripts/postinst
 grep -q 'unexpected UCI type' scripts/postinst
 sh tools/test-general-migration.sh
+sh tools/test-port-migration.sh
 python3 tools/test-regressions.py
 
 grep -q 'ensure_section web web' scripts/postinst
