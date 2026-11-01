@@ -76,4 +76,9 @@ grep -Fq 'WEB auto carrier policy requires at least one carrier_candidate' files
 grep -Fq 'invalid WEB auto carrier candidate' files/telemt.init
 grep -Fq 'duplicate WEB auto carrier candidate' files/telemt.init
 
+# WEB base_path is emitted per vhost and must be validated before TOML output.
+grep -Fq 'config_get vh_base_path "$s" base_path ""' files/telemt.init
+grep -Fq 'base_path = "$(sanitize_toml_value "$vh_base_path")"' files/telemt.init
+grep -q "option base_path ''" files/telemt.config
+
 echo 'source contracts ok'
