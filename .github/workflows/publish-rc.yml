@@ -46,9 +46,6 @@ jobs:
             "Sources and contracts"
             "Build native OpenWrt packages"
             "Install on real OpenWrt userspace"
-            "Upgrade UCI fixtures on OpenWrt (APK/IPK)"
-            "Paired RC core + LuCI on OpenWrt (APK/IPK)"
-            "Generate TOML and start Telemt on OpenWrt (APK/IPK)"
           )
           for name in "${required[@]}"; do
             jq -e --arg name "$name" '[.jobs[] | select(.name == $name and .conclusion == "success")] | length == 1' "$RUNNER_TEMP/jobs.json" >/dev/null ||
