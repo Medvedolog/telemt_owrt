@@ -446,6 +446,782 @@ TOML
                 logger -t telemt "Init: WEB vhost '$vh_name' public_addr must be a concrete IP on :443"
                 web_generation_error=1; return 0
             fi
+            # Telemt WEB base_path: empty or up to 128 ASCII bytes in path segments.
+            if [ -n "$vh_base_path" ]; then
+                if [ "${#vh_base_path}" -gt 128 ] || ! printf '%s\n' "$vh_base_path" | grep -qE '^[A-Za-z0-9][A-Za-z0-9_-]*(/[A-Za-z0-9][A-Za-z0-9_-]*)*
+                logger -t telemt "Init: WEB decoy mode '$vh_decoy_mode' not enabled in this LAB"
+                web_generation_error=1; return 0
+            fi
+            if ! echo "$vh_decoy_upstream" | grep -qE '^http://(([0-9]{1,3}\.){3}[0-9]{1,3}|\[[0-9A-Fa-f:]+\])(:[0-9]{1,5})?$'; then
+                logger -t telemt "Init: WEB vhost '$vh_name' decoy must be an http:// IP-literal origin without path/query"
+                web_generation_error=1; return 0
+            fi
+
+            web_vhost_count=$((web_vhost_count + 1))
+            web_seen_vhosts="${web_seen_vhosts}${vh_name}|"
+            web_seen_hosts="${web_seen_hosts}${vh_host}|"
+            web_current_vhost="$vh_name"
+            web_profiles_configured=0
+            web_profiles_active=0
+            web_vhost_tmp=$(mktemp /tmp/telemt_web_vhost.XXXXXX)
+            if [ -z "$web_vhost_tmp" ]; then
+                logger -t telemt "Init: cannot allocate WEB vhost temporary file"
+                web_generation_error=1; return 0
+            fi
+
+            cat <<TOML > "$web_vhost_tmp"
+
+[[web.vhosts]]
+host = "$(sanitize_toml_value "$vh_host")"
+public_addr = "$(sanitize_toml_value "$vh_public_addr")"
+base_path = "$(sanitize_toml_value "$vh_base_path")"
+
+[web.vhosts.decoy]
+mode = "http_upstream"
+upstream = "$(sanitize_toml_value "$vh_decoy_upstream")"
+TOML
+            config_foreach handle_web_profile web_profile
+
+            if [ "$web_profiles_configured" -eq 0 ]; then
+                logger -t telemt "Init: WEB vhost '$vh_name' has no enabled profiles"
+                web_generation_error=1
+            elif [ "$web_profiles_active" -eq 0 ]; then
+                logger -t telemt "Init: WEB vhost '$vh_name' has no active profiles; omitting it until a shared user is enabled"
+            elif [ "$web_generation_error" -eq 0 ]; then
+                cat "$web_vhost_tmp" >> "$TMP_WEB"
+                web_active_vhost_count=$((web_active_vhost_count + 1))
+            fi
+            rm -f "$web_vhost_tmp"
+            web_vhost_tmp=""
+        }
+
+        validate_web_profile_vhost() {
+            local s="$1"
+            local p_en p_vhost
+            config_get_bool p_en "$s" enabled 1
+            [ "$p_en" -eq 1 ] || return 0
+            config_get p_vhost "$s" vhost ""
+            case "$web_seen_vhosts" in
+                *"|$p_vhost|"*) ;;
+                *)
+                    logger -t telemt "Init: WEB profile '$s' references missing/disabled vhost '$p_vhost'"
+                    web_generation_error=1
+                    ;;
+            esac
+        }
+
+        config_foreach handle_web_vhost web_vhost
+        config_foreach validate_web_profile_vhost web_profile
+        if [ "$web_vhost_count" -eq 0 ]; then
+            logger -t telemt "Init: WEB is enabled but no enabled web_vhost exists"
+            web_generation_error=1
+        fi
+        if [ "$web_generation_error" -ne 0 ]; then
+            cleanup_tmp; return 1
+        fi
+        if [ "$web_active_vhost_count" -gt 0 ]; then
+            web_runtime_enabled=1
+        else
+            logger -t telemt "Init: WEB configured but all shared-user profiles are disabled; runtime WEB remains off"
+        fi
+    fi
+
+    config_get_bool ext_rt general extended_runtime_enabled 1
+    config_get_bool m_alo general metrics_allow_lo 1
+    config_get_bool m_alan general metrics_allow_lan 1
+
+    # Listen addresses for the control plane (metrics / API).
+    # Default 127.0.0.1 preserves the safe loopback-only behaviour on upgrade.
+    # Set to 0.0.0.0 to expose on the LAN — the whitelist below is then the
+    # only access guard, so keep it tight. (Only 127.0.0.1/0.0.0.0 are accepted.)
+    config_get metrics_listen_addr general metrics_listen_addr "127.0.0.1"
+    config_get api_listen_addr     general api_listen_addr     "127.0.0.1"
+    is_bind_addr "$metrics_listen_addr" || metrics_listen_addr="127.0.0.1"
+    is_bind_addr "$api_listen_addr"     || api_listen_addr="127.0.0.1"
+    local metrics_bind api_bind
+    metrics_bind="$(socket_addr "$metrics_listen_addr" "$metrics_port")"
+    api_bind="$(socket_addr "$api_listen_addr" "$api_port")"
+    config_get metrics_whitelist general metrics_whitelist ""
+    config_get domain general domain "google.com"
+    config_get external_ip general external_ip ""
+    config_get announce_ip general announce_ip ""
+
+    # PATCH 3.3.16: public_port — port shown in tg:// links (critical for NAT scenarios)
+    config_get public_port general public_port ""
+    is_uint "$public_port" || public_port=""
+
+    # PATCH 3.3.22: data_path — runtime data directory (useful for embedded/read-only rootfs)
+    config_get data_path general data_path ""
+
+    config_get log_level general log_level "normal"
+    case "$log_level" in debug|verbose|normal|silent) ;; *) log_level="normal" ;; esac
+
+    config_get mask_proxy_protocol general mask_proxy_protocol "0"
+    case "$mask_proxy_protocol" in 1|2) ;; *) mask_proxy_protocol="0" ;; esac
+
+    # PATCH 3.3.30: mask_port — upstream mask port for TLS fronting (Self-Stealth)
+    # Allows redirecting DPI scanners to a local web server (e.g. uhttpd on 127.0.0.1:4433)
+    config_get mask_port general mask_port "443"
+    is_uint "$mask_port" || mask_port="443"
+
+    # PATCH 3.3.30: mask_host — upstream mask host for TLS fronting relay
+    # When set, scanners are relayed to this host instead of the real tls_domain
+    config_get mask_host general mask_host ""
+    mask_host=$(echo "$mask_host" | tr -cd 'A-Za-z0-9.:-')
+
+    # --- 3.4.18: client_mss (global, [server]) ---
+    # Empty/unset => omit the key => binary keeps kernel default.
+    # Accepts presets extreme-low|tspu|2in8, or a decimal in [88,4096].
+    config_get client_mss general client_mss ""
+    case "$client_mss" in
+        ""|extreme-low|tspu|2in8) : ;;
+        *) is_uint "$client_mss" && [ "$client_mss" -ge 88 ] && [ "$client_mss" -le 4096 ] || {
+               [ -n "$client_mss" ] && logger -t telemt "Init: invalid client_mss '$client_mss', ignoring"
+               client_mss=""
+           } ;;
+    esac
+
+    # --- 3.4.18: mask_dynamic ([censorship]) ---
+    # Binary default is true. We surface it so the behavioural change isn't silent.
+    config_get_bool mask_dynamic general mask_dynamic 1
+
+    config_get prefer_ip general prefer_ip "4"
+    if [ "$prefer_ip" != "4" ] && [ "$prefer_ip" != "6" ]; then prefer_ip="4"; fi
+
+    domain=$(echo "$domain" | tr -cd 'A-Za-z0-9.-')
+    [ -z "$domain" ] && domain="google.com"
+    announce_ip=$(echo "$announce_ip" | tr -cd 'A-Za-z0-9.-')
+    external_ip=$(echo "$external_ip" | awk '{print $1}' | tr -cd 'A-Za-z0-9.-')
+    [ -z "$announce_ip" ] && announce_ip="$external_ip"
+
+    config_get_bool listen_ipv4 general listen_ipv4 1
+    config_get_bool listen_ipv6 general listen_ipv6 0
+    config_get tm_handshake general tm_handshake "15"
+    config_get tm_connect general tm_connect "10"
+    config_get tm_keepalive general tm_keepalive "60"
+    config_get tm_ack general tm_ack "300"
+    config_get_bool use_mp general use_middle_proxy 0
+    config_get_bool use_stun general use_stun 0
+
+    # Read ME options only if ME is enabled — avoids polluting TOML with garbage defaults
+    if [ "$use_mp" -eq 1 ]; then
+        config_get me_pool_size general me_pool_size "16"
+        config_get me_warm_standby general me_warm_standby "8"
+        config_get me_update_every general update_every "300"
+        config_get_bool hardswap general hardswap 1
+        config_get me_drain_ttl general me_drain_ttl "90"
+        config_get_bool auto_deg general auto_degradation 1
+        config_get deg_min_dc general degradation_min_dc "2"
+        # PATCH 3.3.16: Removed phantom config_get calls:
+        #   me_adaptive_floor_idle_secs, me_adaptive_floor_recover_grace_secs,
+        #   me_adaptive_floor_min_writers_single_endpoint,
+        #   me_single_endpoint_shadow_writers, me_single_endpoint_outage_mode_enabled,
+        #   me_single_endpoint_outage_disable_quarantine,
+        #   me_single_endpoint_shadow_rotate_every_secs
+        # Reason: binary v3.3.16+ self-tunes these; they are Read-Only API state,
+        #         NOT TOML config keys. Parser silently ignored them previously.
+    fi
+
+    config_get_bool desync_all general desync_all_full 0
+    config_get ad_tag general ad_tag ""
+    config_get fake_cert_len general fake_cert_len "2048"
+    config_get tls_full_cert_ttl_secs general tls_full_cert_ttl_secs "0"
+    config_get replay_window_secs general replay_window_secs "1800"
+    config_get_bool ignore_time_skew general ignore_time_skew 0
+
+    ad_tag=$(sanitize_toml_value "$ad_tag" | tr -cd 'A-Fa-f0-9')
+
+    local mp_str="false";       [ "$use_mp" -eq 1 ]          && mp_str="true"
+    local stun_str="false";     [ "$use_stun" -eq 1 ]         && stun_str="true"
+    local v4_str="false";       [ "$listen_ipv4" -eq 1 ]      && v4_str="true"
+    local v6_str="false";       [ "$listen_ipv6" -eq 1 ]      && v6_str="true"
+    local time_skew_str="false";[ "$ignore_time_skew" -eq 1 ] && time_skew_str="true"
+    local hardswap_str="false"; [ "${hardswap:-0}" -eq 1 ]    && hardswap_str="true"
+    local auto_deg_str="false"; [ "${auto_deg:-0}" -eq 1 ]    && auto_deg_str="true"
+    local api_str="false";      [ "$ext_rt" -eq 1 ]           && api_str="true"
+    local minimal_rt_str="false"; [ "$ext_rt" -eq 1 ]         && minimal_rt_str="true"
+
+    local m_cls="false"; local m_sec="false"; local m_tls="false"
+    case "$mode" in
+        "classic") m_cls="true" ;;
+        "dd")      m_sec="true" ;;
+        "all")     m_cls="true"; m_sec="true"; m_tls="true" ;;
+        *)         m_tls="true" ;;
+    esac
+
+    # --- Metrics whitelist CIDR builder ---
+    local wl_toml=""
+    [ "$m_alo" -eq 1 ] && wl_toml="\"127.0.0.1/32\", \"::1/128\""
+
+    if [ "$m_alan" -eq 1 ]; then
+        local lan_ip=$(uci -q get network.lan.ipaddr)
+        if [ -z "$lan_ip" ]; then
+            lan_ip=$(ubus call network.interface.lan status 2>/dev/null | grep -A2 'ipv4-address' | grep address | awk -F'"' '{print $4}')
+            local lan_mask=$(ubus call network.interface.lan status 2>/dev/null | grep -A2 'ipv4-address' | grep mask | awk '{print $2}' | tr -d ',')
+        else
+            local lan_mask=$(uci -q get network.lan.netmask)
+        fi
+        if [ -n "$lan_ip" ] && [ -n "$lan_mask" ] && [ -x /bin/ipcalc.sh ]; then
+            eval $(/bin/ipcalc.sh "$lan_ip" "$lan_mask" 2>/dev/null)
+            if [ -n "$NETWORK" ] && [ -n "$PREFIX" ]; then
+                if ! echo "$wl_toml" | grep -q "\"$NETWORK/$PREFIX\""; then
+                    [ -n "$wl_toml" ] && wl_toml="${wl_toml}, "
+                    wl_toml="${wl_toml}\"$NETWORK/$PREFIX\""
+                fi
+            fi
+        fi
+    fi
+
+    for raw in $(echo "$metrics_whitelist" | tr ',' ' '); do
+        ip="$(echo "$raw" | tr -d ' \t\r\n')"
+        [ -z "$ip" ] && continue
+        if echo "$ip" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then ip="$ip/32"
+        elif echo "$ip" | grep -qE '^[0-9A-Fa-f:]+$'; then ip="$ip/128"; fi
+        if is_cidr "$ip"; then
+            if ! echo "$wl_toml" | grep -q "\"$ip\""; then
+                [ -n "$wl_toml" ] && wl_toml="${wl_toml}, "
+                wl_toml="${wl_toml}\"$ip\""
+            fi
+        fi
+    done
+
+    # --- Static TOML header ---
+    cat <<TOML > "$TMP_CONF"
+[network]
+ipv4 = $v4_str
+ipv6 = $v6_str
+prefer = $prefer_ip
+stun_use = $stun_str
+stun_tcp_fallback = true
+stun_servers = [
+  "stun.l.google.com:5349",
+  "stun1.l.google.com:3478",
+  "stun.l.google.com:19302",
+  "stun1.l.google.com:19302"
+]
+
+[general]
+fast_mode = true
+use_middle_proxy = $mp_str
+log_level = "$log_level"
+tg_connect = $tm_connect
+direct_relay_buffer_budget_max_bytes = $direct_relay_buffer_budget_max_bytes
+TOML
+
+    # PATCH 3.3.22: data_path — runtime data directory
+    # Only for binary >= 3.3.19 (PR#433 added data_path support)
+    if [ -n "$data_path" ]; then
+        local _cur_ver=$(cat "$VER_FILE" 2>/dev/null)
+        local _dp_ok=0
+        if [ -n "$_cur_ver" ]; then
+            local _ma=${_cur_ver%%.*} _rest=${_cur_ver#*.}
+            local _mi=${_rest%%.*} _pa=${_rest#*.}
+            # 3.3.19+ → major>3 OR (major==3 AND minor>3) OR (major==3 AND minor==3 AND patch>=19)
+            [ "${_ma:-0}" -gt 3 ] 2>/dev/null && _dp_ok=1
+            [ "${_ma:-0}" -eq 3 ] && [ "${_mi:-0}" -gt 3 ] 2>/dev/null && _dp_ok=1
+            [ "${_ma:-0}" -eq 3 ] && [ "${_mi:-0}" -eq 3 ] && [ "${_pa:-0}" -ge 19 ] 2>/dev/null && _dp_ok=1
+        fi
+        if [ "$_dp_ok" = "1" ]; then
+            mkdir -p "$data_path" 2>/dev/null
+            printf 'data_path = "%s"\n' "$data_path" >> "$TMP_CONF"
+        else
+            logger -t telemt "Init: data_path ignored (binary ${_cur_ver:-unknown} < 3.3.19)"
+        fi
+    fi
+
+    # --- ME block (only when enabled) ---
+    if [ "$use_mp" -eq 1 ]; then
+        [ -n "$ad_tag" ] && echo "ad_tag = \"$ad_tag\"" >> "$TMP_CONF"
+        cat <<TOML >> "$TMP_CONF"
+middle_proxy_nat_probe = $stun_str
+middle_proxy_pool_size = $me_pool_size
+middle_proxy_warm_standby = $me_warm_standby
+hardswap = $hardswap_str
+me_pool_drain_ttl_secs = $me_drain_ttl
+update_every = $me_update_every
+proxy_secret_path = "/var/etc/telemt/proxy-secret"
+proxy_config_v4_cache_path = "/var/etc/telemt/proxy-config-v4.txt"
+proxy_config_v6_cache_path = "/var/etc/telemt/proxy-config-v6.txt"
+# PATCH 3.3.16: renamed me2dc_fallback → auto_degradation_enabled (correct TOML key)
+auto_degradation_enabled = $auto_deg_str
+# PATCH 3.3.16: added previously missing TOML key for min DC threshold
+degradation_min_unavailable_dc_groups = $deg_min_dc
+TOML
+        # PATCH 3.3.16: REMOVED phantom keys:
+        #   floor_mode, adaptive_floor_idle_secs, adaptive_floor_recover_grace_secs,
+        #   adaptive_floor_min_writers_single_endpoint, me_single_endpoint_shadow_writers,
+        #   me_single_endpoint_outage_mode_enabled, me_single_endpoint_outage_disable_quarantine,
+        #   me_single_endpoint_shadow_rotate_every_secs
+        # The binary self-adapts these values; they appear in /v1/limits/effective as Read-Only.
+    else
+        [ -n "$ad_tag" ] && echo "ad_tag = \"$ad_tag\"" >> "$TMP_CONF"
+    fi
+
+    if [ "$desync_all" -eq 1 ]; then echo "desync_all_full = true" >> "$TMP_CONF"; fi
+
+    mkdir -p /var/etc/telemt_tlsfront /var/etc/telemt
+
+    cat <<TOML >> "$TMP_CONF"
+
+[general.modes]
+classic = $m_cls
+secure = $m_sec
+tls = $m_tls
+
+[server]
+port = $port
+metrics_port = $metrics_port
+metrics_listen = "${metrics_bind}"
+metrics_whitelist = [$wl_toml]
+TOML
+
+    # 3.4.18: global client-facing MSS. Omit when empty so kernel default stays.
+    [ -n "$client_mss" ] && echo "client_mss = \"$client_mss\"" >> "$TMP_CONF"
+
+    # [server.api] must come before [[server.listeners]].
+    # In toml-rs (Rust parser), an array-of-tables header resets the "current table"
+    # context, causing any subsequent [server.X] to be scoped under the last array entry.
+    cat <<TOML >> "$TMP_CONF"
+
+[server.api]
+enabled = $api_str
+listen = "${api_bind}"
+whitelist = [$wl_toml]
+minimal_runtime_enabled = $minimal_rt_str
+minimal_runtime_cache_ttl_ms = 1000
+# explicit contract: LuCI and API clients must be able to mutate users
+read_only = false
+TOML
+
+    # [[server.listeners]] MUST come after all [server.*] sub-tables (toml-rs ordering constraint)
+    if [ "$listen_ipv4" -eq 1 ]; then
+        echo "[[server.listeners]]" >> "$TMP_CONF"
+        echo "ip = \"0.0.0.0\"" >> "$TMP_CONF"
+        if [ -n "$announce_ip" ]; then echo "announce = \"$announce_ip\"" >> "$TMP_CONF"; fi
+    fi
+    if [ "$listen_ipv6" -eq 1 ]; then
+        echo "[[server.listeners]]" >> "$TMP_CONF"
+        echo "ip = \"::\"" >> "$TMP_CONF"
+        if [ -n "$announce_ip" ]; then echo "announce = \"$announce_ip\"" >> "$TMP_CONF"; fi
+    fi
+
+    # WEB is a separate application transport behind a trusted TLS terminator.
+    # Keep all WEB structure before the DYNAMIC marker so current reload logic
+    # treats WEB changes as restart-sensitive CORE changes.
+    if [ "$web_runtime_enabled" -eq 1 ]; then
+        cat <<TOML >> "$TMP_CONF"
+
+[[server.listeners]]
+ip = "$(sanitize_toml_value "$web_ip")"
+port = $web_port
+transport = "web"
+proxy_protocol = false
+reuse_allow = false
+web_client_ip_source = "$web_client_ip_source"
+web_trusted_proxy_cidrs = [$web_trusted_toml]
+
+[web]
+enabled = true
+carrier = "$web_carrier"
+TOML
+        if [ "$web_carrier_policy" = "auto" ]; then
+            echo "carriers = [$web_carriers_toml]" >> "$TMP_CONF"
+            [ "$web_carrier_learning" -eq 1 ] && echo "carrier_learning = true" >> "$TMP_CONF" || echo "carrier_learning = false" >> "$TMP_CONF"
+            echo "carrier_negotiation_aggressiveness = \"$web_carrier_negotiation_aggressiveness\"" >> "$TMP_CONF"
+        fi
+        # [web.debug] is a sub-table of [web]: it must precede [[web.vhosts]] (toml-rs ordering).
+        if [ "$web_debug_enabled" -eq 1 ]; then
+            cat <<TOML >> "$TMP_CONF"
+
+[web.debug]
+enabled = true
+sideband = $([ "$web_debug_sideband" -eq 1 ] && echo true || echo false)
+capture_lifecycle = $([ "$web_debug_capture_lifecycle" -eq 1 ] && echo true || echo false)
+TOML
+        fi
+        cat "$TMP_WEB" >> "$TMP_CONF"
+    fi
+
+    cat <<TOML >> "$TMP_CONF"
+
+[timeouts]
+client_handshake = $tm_handshake
+client_keepalive = $tm_keepalive
+client_ack = $tm_ack
+
+[censorship]
+tls_domain = "$domain"
+mask = true
+mask_dynamic = $([ "$mask_dynamic" -eq 1 ] && echo true || echo false)
+mask_port = $mask_port
+mask_proxy_protocol = $mask_proxy_protocol
+TOML
+
+    # PATCH 3.3.30: mask_host — write only when explicitly set (null = binary uses tls_domain)
+    [ -n "$mask_host" ] && echo "mask_host = \"$mask_host\"" >> "$TMP_CONF"
+
+    cat <<TOML >> "$TMP_CONF"
+tls_emulation = true
+tls_front_dir = "/var/etc/telemt_tlsfront"
+fake_cert_len = $fake_cert_len
+tls_full_cert_ttl_secs = $tls_full_cert_ttl_secs
+
+[access]
+replay_check_len = 65536
+replay_window_secs = $replay_window_secs
+ignore_time_skew = $time_skew_str
+TOML
+
+    # --- DYNAMIC CONFIG (users, links, upstreams) ---
+    # NOTE: Marker used by reload_service() for hot-reload diff
+    echo "# --- DYNAMIC CONFIG ---" >> "$TMP_CONF"
+
+    is_user_enabled() { local en; config_get_bool en "$1" enabled 1; [ "$en" -eq 1 ]; }
+    add_user_link()     { is_user_enabled "$1" || return 0; printf '"%s", ' "$1" >> "$TMP_LINKS"; }
+    add_user_secret()   { is_user_enabled "$1" || return 0; local sec; config_get sec "$1" secret; [ -n "$sec" ] && echo "$1 = \"$sec\"" >> "$TMP_USERS"; }
+    add_user_conns()    { is_user_enabled "$1" || return 0; local c; config_get c "$1" max_tcp_conns; [ -n "$c" ] && [ "$c" != "unlimited" ] && is_uint "$c" && echo "$1 = $c" >> "$TMP_CONNS"; }
+    add_user_unique_ips() { is_user_enabled "$1" || return 0; local i; config_get i "$1" max_unique_ips; [ -n "$i" ] && [ "$i" != "unlimited" ] && is_uint "$i" && echo "$1 = $i" >> "$TMP_IPS"; }
+    add_user_quota() {
+        is_user_enabled "$1" || return 0
+        local q; config_get q "$1" data_quota
+        if [ -n "$q" ] && [ "$q" != "unlimited" ]; then
+            if echo "$q" | grep -qE '^[0-9]+([.,][0-9]+)?$'; then
+                local b=$(echo "$q" | sed 's/,/\./g' | awk '{printf "%.0f", $1 * 1073741824}')
+                if [ -n "$b" ] && is_uint "$b" && [ "$b" -gt 0 ]; then echo "$1 = $b" >> "$TMP_QUOTA"; fi
+            fi
+        fi
+    }
+    add_user_expiration() {
+        is_user_enabled "$1" || return 0
+        local exp; config_get exp "$1" expire_date
+        if [ -n "$exp" ] && [ "$exp" != "unlimited" ]; then
+            local fmt=$(echo "$exp" | awk -F'[. :]' 'NF==5 {printf "%04d-%02d-%02dT%02d:%02d:00Z", $3, $2, $1, $4, $5}')
+            [ -n "$fmt" ] && echo "$1 = \"$fmt\"" >> "$TMP_EXP"
+        fi
+    }
+
+    config_foreach add_user_link user
+    local links_str=""
+    if [ -s "$TMP_LINKS" ]; then
+        links_str=$(sed 's/, $//' "$TMP_LINKS")
+        printf '\n[general.links]\nshow = [%s]\n' "$links_str" >> "$TMP_CONF"
+    else
+        printf '\n[general.links]\nshow = "*"\n' >> "$TMP_CONF"
+    fi
+
+    # public_host: the IP/domain shown in tg:// links
+    [ -n "$announce_ip" ] && printf 'public_host = "%s"\n' "$announce_ip" >> "$TMP_CONF"
+    # PATCH 3.3.16: public_port — external port for tg:// links (critical under NAT/port-mapping)
+    # Example: router listens on :8443 internally, ISP maps it to :443 externally.
+    [ -n "$public_port" ] && printf 'public_port = %s\n' "$public_port" >> "$TMP_CONF"
+
+    printf '\n[access.users]\n' >> "$TMP_CONF"
+    config_foreach add_user_secret user
+    [ -s "$TMP_USERS" ] && cat "$TMP_USERS" >> "$TMP_CONF"
+
+    config_foreach add_user_conns user
+    if [ -s "$TMP_CONNS" ]; then printf '\n[access.user_max_tcp_conns]\n' >> "$TMP_CONF"; cat "$TMP_CONNS" >> "$TMP_CONF"; fi
+
+    config_foreach add_user_unique_ips user
+    if [ -s "$TMP_IPS" ]; then printf '\n[access.user_max_unique_ips]\n' >> "$TMP_CONF"; cat "$TMP_IPS" >> "$TMP_CONF"; fi
+
+    config_foreach add_user_quota user
+    if [ -s "$TMP_QUOTA" ]; then printf '\n[access.user_data_quota]\n' >> "$TMP_CONF"; cat "$TMP_QUOTA" >> "$TMP_CONF"; fi
+
+    config_foreach add_user_expiration user
+    if [ -s "$TMP_EXP" ]; then printf '\n[access.user_expirations]\n' >> "$TMP_CONF"; cat "$TMP_EXP" >> "$TMP_CONF"; fi
+
+    # --- Upstreams ---
+    local has_upstreams=0
+    handle_upstream() {
+        local s="$1"
+        local u_en u_type u_addr u_user u_pass u_weight u_scopes u_interface u_url
+
+        config_get_bool u_en "$s" enabled 1
+        [ "$u_en" -ne 1 ] && return
+
+        config_get u_type "$s" type "direct"
+        config_get u_weight "$s" weight "10"
+        config_get u_scopes "$s" scopes ""
+        config_get u_interface "$s" interface ""
+
+        # PATCH 3.3.30: shadowsocks upstream uses 'url' (SIP002 format) instead of 'address'
+        if [ "$u_type" = "shadowsocks" ]; then
+            config_get u_url "$s" url ""
+            [ -z "$u_url" ] && return
+        elif [ "$u_type" != "direct" ]; then
+            config_get u_addr "$s" address ""
+            [ -z "$u_addr" ] && return
+        fi
+
+        printf '\n[[upstreams]]\n' >> "$TMP_CONF"
+        echo "type = \"$u_type\""     >> "$TMP_CONF"
+        echo "weight = $u_weight"     >> "$TMP_CONF"
+        echo "enabled = true"         >> "$TMP_CONF"
+
+        [ -n "$u_scopes" ] && echo "scopes = \"$(sanitize_toml_value "$u_scopes")\"" >> "$TMP_CONF"
+
+        if [ "$u_type" = "shadowsocks" ]; then
+            # Shadowsocks: url field (SIP002 format), no username/password
+            echo "url = \"$(sanitize_toml_value "$u_url")\"" >> "$TMP_CONF"
+            [ -n "$u_interface" ] && echo "interface = \"$(sanitize_toml_value "$u_interface")\"" >> "$TMP_CONF"
+        elif [ "$u_type" != "direct" ]; then
+            config_get u_user "$s" username ""
+            config_get u_pass "$s" password ""
+            echo "address = \"$(sanitize_toml_value "$u_addr")\"" >> "$TMP_CONF"
+            [ -n "$u_user" ] && echo "username = \"$(sanitize_toml_value "$u_user")\"" >> "$TMP_CONF"
+            [ -n "$u_pass" ] && echo "password = \"$(sanitize_toml_value "$u_pass")\"" >> "$TMP_CONF"
+        elif [ -n "$u_interface" ]; then
+            echo "interface = \"$(sanitize_toml_value "$u_interface")\"" >> "$TMP_CONF"
+        fi
+        has_upstreams=1
+    }
+    config_foreach handle_upstream upstream
+
+    # Fallback: always ensure at least one direct upstream exists
+    if [ "$has_upstreams" -eq 0 ]; then
+        printf '\n[[upstreams]]\ntype = "direct"\nenabled = true\nweight = 10\n' >> "$TMP_CONF"
+    fi
+
+    if ! mv -f "$TMP_CONF" "$target_file"; then
+        cleanup_tmp
+        return 1
+    fi
+    cleanup_tmp
+}
+
+# ------------------------------------------------------------------------------
+get_telemt_pids() {
+    # Returns PIDs of the telemt PROXY process only (not telemt-bot or other sidecars).
+    # Checks: comm == "telemt" AND cmdline contains the TOML config path.
+    local p comm cmdline out=""
+    for p in $(pidof telemt 2>/dev/null); do
+        comm=$(cat "/proc/$p/comm" 2>/dev/null)
+        [ "$comm" = "telemt" ] || continue
+        cmdline=$(cat "/proc/$p/cmdline" 2>/dev/null | tr '\0' ' ')
+        # The proxy is launched as: /usr/bin/telemt /tmp/etc/telemt.toml
+        # The bot would be: telemt-bot ... or telemt --bot-mode ...
+        case "$cmdline" in
+            *telemt.toml*|*"$PROG"*) out="$out $p" ;;
+        esac
+    done
+    echo "$out" | sed 's/^ *//'
+}
+
+wait_telemt_pids_gone() {
+    local timeout="$1"
+    local i p alive
+    i=0
+    while [ "$i" -lt "$timeout" ]; do
+        alive=0
+        for p in $(get_telemt_pids); do
+            if kill -0 "$p" 2>/dev/null; then
+                alive=1
+                break
+            fi
+        done
+        [ "$alive" -eq 0 ] && return 0
+        sleep 1
+        i=$((i + 1))
+    done
+    return 1
+}
+
+force_kill_telemt() {
+    local p
+    for p in $(get_telemt_pids); do
+        kill -KILL "$p" 2>/dev/null
+    done
+}
+
+# ------------------------------------------------------------------------------
+start_service() {
+    umask 077
+    config_load telemt
+
+    local enabled
+    config_get_bool enabled general enabled 0
+    if [ "$enabled" -ne 1 ]; then
+        logger -t telemt "Init: Service is disabled in config (Enable checkbox). Refusing start."
+        return 0
+    fi
+
+    if [ ! -x "$PROG" ]; then
+        logger -t telemt "Init: CRITICAL ERROR! Binary not found or not executable at $PROG"
+        return 1
+    fi
+
+    mkdir -p /tmp/etc /var/etc
+
+    if [ -f "$MANUAL_STOP" ]; then
+        logger -t telemt "Init: manual stop flag is set. Refusing automatic start."
+        return 0
+    fi
+
+    # Version detection: passive marker first. telemt_wrt appends the marker to
+    # the very end of packaged binaries, so the normal path reads only 512 bytes
+    # and does not exec the Rust binary just to discover its version.
+    local ver=""
+    ver=$(tail -c 512 "$PROG" 2>/dev/null | grep -a -oE 'MTProxy v[0-9]+\.[0-9]+\.[0-9]+' | tail -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+
+    # Legacy packaged binaries may contain the same marker away from the tail.
+    [ -z "$ver" ] && ver=$(grep -a -m 1 -ioE 'MTProxy v[0-9]+\.[0-9]+\.[0-9]+' "$PROG" 2>/dev/null | head -n 1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+
+    # Compatibility fallback for manually replaced/upstream binaries without our marker.
+    [ -z "$ver" ] && ver=$("$PROG" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+    [ -z "$ver" ] && ver=$("$PROG" -V 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+
+    if [ -n "$ver" ]; then
+        echo "$ver" > "$VER_FILE"
+        chmod 644 "$VER_FILE"
+    fi
+
+    if ! generate_toml "$CONF"; then
+        logger -t telemt "Init: TOML generation failed. Aborting start."
+        return 1
+    fi
+    chmod 600 "$CONF"
+
+    # Debug tracer: log effective ME mode to syslog
+    logger -t telemt "Init: using config $CONF"
+    if grep -q '^use_middle_proxy = true' "$CONF"; then
+        logger -t telemt "Init: TOML says ME=ON"
+    else
+        logger -t telemt "Init: TOML says ME=OFF"
+    fi
+
+    local port auto_fw
+    config_get port general port "8443"
+    config_get_bool auto_fw general auto_fw 1
+
+    procd_open_instance
+    procd_set_param command "$PROG" "$CONF"
+    procd_set_param file "$CONF"
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_set_param respawn 3600 30 0
+    procd_set_param limits nofile="65536 65536"
+
+    if [ "$auto_fw" -eq 1 ]; then
+        procd_open_data
+        json_add_array firewall
+        json_add_object ""
+            json_add_string type rule
+            json_add_string name "Allow-Telemt-Magic"
+            json_add_string src "wan"
+            json_add_string dest_port "$port"
+            json_add_string proto "tcp"
+            json_add_string target "ACCEPT"
+        json_close_object
+        json_close_array
+        procd_close_data
+    fi
+    procd_close_instance
+}
+
+# ------------------------------------------------------------------------------
+reload_service() {
+    # If manual stop flag is set, don't reload — user explicitly stopped the service.
+    if [ -f "$MANUAL_STOP" ]; then
+        logger -t telemt "Init: reload_service() skipped — manual stop flag is set."
+        return 0
+    fi
+
+    umask 077
+    config_load telemt
+
+    local enabled
+    config_get_bool enabled general enabled 0
+    if [ "$enabled" -ne 1 ]; then
+        /etc/init.d/telemt stop
+        return 0
+    fi
+
+    local NEW_CONF="/tmp/etc/telemt.toml.new"
+    if ! generate_toml "$NEW_CONF"; then
+        logger -t telemt "Init: TOML generation failed. Aborting reload."
+        rm -f "$NEW_CONF"
+        return 1
+    fi
+    chmod 600 "$NEW_CONF"
+
+    sed -n '1,/^# --- DYNAMIC CONFIG ---/p' "$CONF" 2>/dev/null > /tmp/etc/telemt_core.old
+    sed -n '1,/^# --- DYNAMIC CONFIG ---/p' "$NEW_CONF"          > /tmp/etc/telemt_core.new
+
+    if cmp -s /tmp/etc/telemt_core.old /tmp/etc/telemt_core.new; then
+        mv "$NEW_CONF" "$CONF"
+        logger -t telemt "Init: Hot-reload (users/upstreams only, no restart)."
+    else
+        rm -f "$NEW_CONF"
+        logger -t telemt "Init: Core settings changed. Hard restart."
+        restart
+    fi
+
+    rm -f /tmp/etc/telemt_core.old /tmp/etc/telemt_core.new
+}
+
+# ------------------------------------------------------------------------------
+# stop_service() — procd callback. Called by rc_procd stop_service AFTER procd_kill
+# deregisters the service. procd already sent SIGTERM. We save stats and guarantee
+# the process is dead.
+stop_service() {
+    run_save_stats
+    # procd already sent SIGTERM; wait, then force-kill if needed.
+    if ! wait_telemt_pids_gone 4; then
+        logger -t telemt "Init: stop_service() — survived SIGTERM, sending SIGKILL"
+        force_kill_telemt
+        sleep 1
+    fi
+    logger -t telemt "Init: stop_service() done."
+}
+
+# ------------------------------------------------------------------------------
+# Explicit stop from CLI/LuCI.
+stop() {
+    : > "$MANUAL_STOP"
+    logger -t telemt "Init: stop() — flag set, stopping via procd."
+    rc_procd stop_service "$@"
+    # Belt-and-suspenders: if proxy process still alive
+    if [ -n "$(get_telemt_pids)" ]; then
+        logger -t telemt "Init: stop() — survivors, force killing."
+        force_kill_telemt
+        sleep 1
+    fi
+    logger -t telemt "Init: stop() complete."
+}
+
+# ------------------------------------------------------------------------------
+# Explicit start from CLI/LuCI.
+start() {
+    rm -f "$MANUAL_STOP"
+    logger -t telemt "Init: start() called."
+    rc_procd start_service "$@"
+}
+
+# ------------------------------------------------------------------------------
+# Explicit restart from CLI/LuCI.
+restart() {
+    rm -f "$MANUAL_STOP"
+    logger -t telemt "Init: restart() — stopping old."
+    run_save_stats
+    rc_procd stop_service "$@"
+    if ! wait_telemt_pids_gone 3; then
+        force_kill_telemt
+        sleep 1
+    fi
+    logger -t telemt "Init: restart() — starting fresh."
+    rc_procd start_service "$@"
+}
+
+# ------------------------------------------------------------------------------
+service_triggers() {
+    procd_add_reload_trigger "telemt"
+}
+; then
+                    logger -t telemt "Init: invalid WEB base_path for vhost '$vh_name'"
+                    web_generation_error=1; return 0
+                fi
+            fi
             if [ "$vh_decoy_mode" != "http_upstream" ]; then
                 logger -t telemt "Init: WEB decoy mode '$vh_decoy_mode' not enabled in this LAB"
                 web_generation_error=1; return 0
