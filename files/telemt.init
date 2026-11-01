@@ -446,10 +446,15 @@ TOML
                 logger -t telemt "Init: WEB vhost '$vh_name' public_addr must be a concrete IP on :443"
                 web_generation_error=1; return 0
             fi
-            # Telemt WEB base_path: empty or up to 128 ASCII bytes in path segments.
+            # Empty base_path is backward-compatible; non-empty paths are canonical ASCII.
             if [ -n "$vh_base_path" ]; then
-                if [ "${#vh_base_path}" -gt 128 ] || ! printf '%s\n' "$vh_base_path" | grep -qE '^[A-Za-z0-9][A-Za-z0-9_-]*(/[A-Za-z0-9][A-Za-z0-9_-]*)*
-                logger -t telemt "Init: WEB decoy mode '$vh_decoy_mode' not enabled in this LAB"
+                if [ "${#vh_base_path}" -gt 128 ] || ! printf "%s\n" "$vh_base_path" | grep -qE "^[A-Za-z0-9][A-Za-z0-9_-]*(/[A-Za-z0-9][A-Za-z0-9_-]*)*$"; then
+                    logger -t telemt "Init: invalid WEB base_path for vhost $vh_name"
+                    web_generation_error=1; return 0
+                fi
+            fi
+            if [ "$vh_decoy_mode" != "http_upstream" ]; then
+                logger -t telemt "Init: WEB decoy mode unsupported"
                 web_generation_error=1; return 0
             fi
             if ! echo "$vh_decoy_upstream" | grep -qE '^http://(([0-9]{1,3}\.){3}[0-9]{1,3}|\[[0-9A-Fa-f:]+\])(:[0-9]{1,5})?$'; then
