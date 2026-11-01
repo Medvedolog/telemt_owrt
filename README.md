@@ -1,7 +1,7 @@
 <h1 align="center">🚀 Headless Telemt для OpenWrt</h1>
 
 <p align="center">
-  Легковесные пакеты бинарников <b>Telegram MTProxy</b> для OpenWrt 21-25<br/>
+  Легковесные пакеты бинарников <b>Telegram MTProxy</b> для OpenWrt 24.10 и 25.12<br/>
   <i>Собрано из официального репозитория <code>telemt/telemt</code> и адаптировано для реального использования на OpenWrt</i>
 </p>
 
@@ -271,4 +271,4 @@
 ### 📋 English Summary
 **Headless Telemt for OpenWrt** is a highly optimized, headless packaging of the official Telegram MTProxy daemon (`telemt`) designed specifically for OpenWrt routers. Rather than forking the core binary, this project compiles the upstream Rust code for `aarch64-musl` with aggressive size optimizations (UPX, `opt-level=z`, `lto=true`) and pairs it with a completely rewritten `init.d` and UCI configuration layer. This custom integration solves real-world router issues like atomic config generation, safe hot-reloading, `procd` supervision, and memory constraints. The output includes ready-to-install IPK and APK packages. (Note: The LuCI WebUI is not included and must be installed as a separate module).
 
-**Current test packages:** Telemt `3.5.16-r1` (IPK for OpenWrt 24.10, APK for 25.12); see [Core RC3](https://github.com/Medvedolog/telemt_owrt/releases/tag/3.5.16-rc1) and [LuCI RC3](https://github.com/Medvedolog/luci-app-telemt/releases/tag/3.5.16-rc1). Historical release notes remain in [Releases](https://github.com/Medvedolog/telemt_owrt/releases) and [CHANGELOG.md](CHANGELOG.md).
+**Current test packages:** Telemt `3.5.16-r1` (IPK for OpenWrt 24.10, APK for 25.12); see [Core RC1](https://github.com/Medvedolog/telemt_owrt/releases/tag/3.5.16-rc1) and [LuCI RC1](https://github.com/Medvedolog/luci-app-telemt/releases/tag/3.5.16-rc1). Historical release notes remain in [Releases](https://github.com/Medvedolog/telemt_owrt/releases) and [CHANGELOG.md](CHANGELOG.md).
