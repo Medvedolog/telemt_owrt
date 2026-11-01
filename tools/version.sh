@@ -1,8 +1,8 @@
 #!/bin/sh
 # Resolve the release version. Prints two shell assignments:
 #
-#   BASE_VERSION=3.5.8      upstream Telemt version (the tag of telemt/telemt to build)
-#   PKG_VERSION=3.5.8-r1    package version handed to owfeed
+#   BASE_VERSION=3.5.16      upstream Telemt version (the tag of telemt/telemt to build)
+#   PKG_VERSION=3.5.16-r1    package version handed to owfeed
 #
 # Source: an explicit argument, else the git tag being built, else version.txt.
 #   X.Y.Z    -> X.Y.Z-r1        X.Y.Z-N  -> X.Y.Z-rN        X.Y.Z-rN -> as given
@@ -18,10 +18,9 @@ elif [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ -n "${GITHUB_REF_NAME:-}" ]; then
     VERSION="$GITHUB_REF_NAME"
 else
     VERSION="$(tr -d '[:space:]' < "$ROOT/version.txt")"
-    # Build the RC2 PR artifact as r2, without changing stable/tag defaults.
+    # Explicit RC build branches keep deterministic package revisions.
     case "${GITHUB_HEAD_REF:-}" in
-        feature/telemt-3.5.14-rc2-web-path) VERSION="${VERSION}-2" ;;
-        release/telemt-3.5.14-rc3) VERSION="${VERSION}-3" ;;
+        release/telemt-3.5.16-rc1) VERSION="${VERSION}-1" ;;
     esac
 fi
 VERSION="${VERSION#v}"
