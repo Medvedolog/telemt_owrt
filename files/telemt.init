@@ -168,6 +168,7 @@ generate_toml() {
     local web_seen_vhosts web_seen_hosts web_current_vhost web_vhost_tmp
     local web_profiles_configured web_profiles_active
     local web_debug_enabled web_debug_sideband web_debug_capture_lifecycle
+    local web_decoy_fasttrack_mode web_http_connection_capacity_action me_reinit_max_concurrency
 
     config_get mode general mode "tls"
     config_get port general port "8443"
@@ -220,6 +221,10 @@ generate_toml() {
             web_debug_enabled=0
         fi
     fi
+    config_get web_decoy_fasttrack_mode web decoy_fasttrack_mode "off"
+    case "$web_decoy_fasttrack_mode" in off|shadow|enforce) ;; *) logger -t telemt "Invalid WEB decoy_fasttrack_mode"; cleanup_tmp; return 1;; esac
+    config_get web_http_connection_capacity_action web http_connection_capacity_action "drop"
+    case "$web_http_connection_capacity_action" in drop|wait|respond) ;; *) logger -t telemt "Invalid WEB HTTP capacity action"; cleanup_tmp; return 1;; esac
     config_get web_carrier web carrier "https"
     case "$web_carrier" in
         https|https-lanes|websocket|websocket-lanes) ;;
@@ -610,6 +615,11 @@ TOML
 
     # Read ME options only if ME is enabled — avoids polluting TOML with garbage defaults
     if [ "$use_mp" -eq 1 ]; then
+        config_get me_reinit_max_concurrency general me_reinit_max_concurrency "2"
+        if ! is_uint "$me_reinit_max_concurrency" || [ "$me_reinit_max_concurrency" -lt 1 ] || [ "$me_reinit_max_concurrency" -gt 8 ]; then
+            logger -t telemt "Invalid ME reinit concurrency (1..8)"
+            cleanup_tmp; return 1
+        fi
         config_get me_pool_size general me_pool_size "16"
         config_get me_warm_standby general me_warm_standby "8"
         config_get me_update_every general update_every "300"
@@ -740,6 +750,7 @@ TOML
         cat <<TOML >> "$TMP_CONF"
 middle_proxy_nat_probe = $stun_str
 middle_proxy_pool_size = $me_pool_size
+me_reinit_max_concurrency = $me_reinit_max_concurrency
 middle_proxy_warm_standby = $me_warm_standby
 hardswap = $hardswap_str
 me_pool_drain_ttl_secs = $me_drain_ttl
@@ -828,6 +839,8 @@ web_trusted_proxy_cidrs = [$web_trusted_toml]
 [web]
 enabled = true
 carrier = "$web_carrier"
+decoy_fasttrack_mode = "$web_decoy_fasttrack_mode"
+http_connection_capacity_action = "$web_http_connection_capacity_action"
 TOML
         if [ "$web_carrier_policy" = "auto" ]; then
             echo "carriers = [$web_carriers_toml]" >> "$TMP_CONF"
