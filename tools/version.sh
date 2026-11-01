@@ -18,6 +18,10 @@ elif [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ -n "${GITHUB_REF_NAME:-}" ]; then
     VERSION="$GITHUB_REF_NAME"
 else
     VERSION="$(tr -d '[:space:]' < "$ROOT/version.txt")"
+    # Build the RC2 PR artifact as r2, without changing stable/tag defaults.
+    case "${GITHUB_HEAD_REF:-}" in
+        feature/telemt-3.5.14-rc2-web-path) VERSION="${VERSION}-2" ;;
+    esac
 fi
 VERSION="${VERSION#v}"
 
