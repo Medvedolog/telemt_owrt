@@ -408,13 +408,14 @@ TOML
 
         handle_web_vhost() {
             local s="$1"
-            local vh_en vh_name vh_host vh_public_addr vh_decoy_mode vh_decoy_upstream
+            local vh_en vh_name vh_host vh_public_addr vh_decoy_mode vh_decoy_upstream vh_base_path
 
             config_get_bool vh_en "$s" enabled 1
             [ "$vh_en" -eq 1 ] || return 0
             config_get vh_name "$s" name "$s"
             config_get vh_host "$s" host ""
             config_get vh_public_addr "$s" public_addr ""
+            config_get vh_base_path "$s" base_path ""
             config_get vh_decoy_mode "$s" decoy_mode "http_upstream"
             config_get vh_decoy_upstream "$s" decoy_upstream ""
 
@@ -471,6 +472,7 @@ TOML
 [[web.vhosts]]
 host = "$(sanitize_toml_value "$vh_host")"
 public_addr = "$(sanitize_toml_value "$vh_public_addr")"
+base_path = "$(sanitize_toml_value "$vh_base_path")"
 
 [web.vhosts.decoy]
 mode = "http_upstream"
