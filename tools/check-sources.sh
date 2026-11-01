@@ -81,4 +81,12 @@ grep -Fq 'config_get vh_base_path "$s" base_path ""' files/telemt.init
 grep -Fq 'base_path = "$(sanitize_toml_value "$vh_base_path")"' files/telemt.init
 grep -q "option base_path ''" files/telemt.config
 
+# Telemt 3.5.14 WEB/ME tuning must use validated values and native TOML keys.
+grep -q 'decoy_fasttrack_mode = ' files/telemt.init
+grep -q 'http_connection_capacity_action = ' files/telemt.init
+grep -q 'me_reinit_max_concurrency = ' files/telemt.init
+grep -q "option decoy_fasttrack_mode 'off'" files/telemt.config
+grep -q "option http_connection_capacity_action 'drop'" files/telemt.config
+grep -q "option me_reinit_max_concurrency '2'" files/telemt.config
+
 echo 'source contracts ok'
