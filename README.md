@@ -6,58 +6,12 @@
 </p>
 
 <blockquote>
-<p><b>🧪 Telemt 3.5.14 RC3 — подписанный Pre-release / signed test release</b></p>
-<p>Core + LuCI версии <code>3.5.14-r3</code> для OpenWrt 24.10/IPK и 25.12/APK. Предусмотрены WEB v2-ссылки и QR с <code>base_path</code>, расширенная настройка WEB/ME и экспериментальное управление WEB <code>pause/drain/resume</code>. <b>RC3 опубликован как подписанный Pre-release, но пока не прошёл аппаратную приёмку; установка на основной маршрутизатор не рекомендуется.</b> Сохраните <code>/etc/config/telemt</code> и протестируйте Direct/ME/WEB, WAN/DNS recovery, обновление с RC2, поддержку TLS frontend и управление lifecycle.</p>
-<p>English: Signed RC3 IPK/APK packages are published as GitHub Pre-releases, not Stable. WEB v2 links, optional advanced tuning and experimental operator lifecycle controls require real-router acceptance. Back up UCI; avoid production installations. Report logs with secrets redacted.</p>
-<p><a href="https://github.com/Medvedolog/luci-app-telemt/issues/29">Отчёты тестеров / Test reports</a>.</p>
-<p><a href="https://github.com/Medvedolog/telemt_owrt/releases/tag/3.5.14-rc3"><b>Скачать Core RC3 / Core packages</b></a> · <a href="https://github.com/Medvedolog/luci-app-telemt/releases/tag/3.5.14-rc3"><b>Скачать LuCI RC3 / LuCI packages</b></a>.</p>
-</blockquote>
-
-<blockquote>
-<p><b>🧪 Telemt 3.5.14 RC2 — тестовый Pre-release / test release candidate</b></p>
-<p><strong>Русский.</strong> Представлен тестовый кандидат <code>3.5.14-r2</code> для OpenWrt 24.10 (IPK) и 25.12 (APK). <b>RC2 предназначен только для тестов; физические роутеры ещё не прошли приёмочные испытания.</b> Не устанавливайте сборки из произвольных CI-артефактов на основной роутер. Новое: опциональный <code>web.vhosts[].base_path</code> для WEB Proxy. Пустой путь сохраняет прежнее поведение. При непустом пути старые ссылки не работают: новый <code>tg://webproxy</code> необходимо получить из вывода Telemt после запуска; LuCI не создаёт поддельную ссылку старого формата. TLS-прокси должен передавать полный путь и исходный Host без переписывания.</p>
-<p><b>Просим тестеров:</b> сохранить <code>/etc/config/telemt</code>; отдельно проверить Direct, ME и WEB, смену WAN/DNS, корректность HTTPS/WebSocket, root и non-root <code>base_path</code>, обновление без потери пользователей, остановку и перезапуск через procd, а также сохранение существующих соединений при reload. Сообщите модель роутера, архитектуру, OpenWrt, установленные версии Core/LuCI, схему TLS-терминации, шаги воспроизведения и очищенный от секретов <code>logread -e telemt</code>. <a href="https://github.com/Medvedolog/luci-app-telemt/issues/29">Отчёты об испытаниях</a>.</p>
-<p><strong>English.</strong> RC2 package version <code>3.5.14-r2</code> is a test prerelease, <b>not hardware-validated or stable</b>. Back up UCI and test Direct/ME/WEB, WAN recovery, vhost path routing and upgrade behavior. Preserve Host and full URI path through TLS termination; regenerate path-bound links from Telemt startup output. Report results with redacted logs in <a href="https://github.com/Medvedolog/luci-app-telemt/issues/29">test issue #29</a>.</p>
-<p><a href="https://github.com/Medvedolog/telemt_owrt/releases/tag/3.5.14-rc2"><b>Core 3.5.14 RC2 — IPK/APK</b></a> · <a href="https://github.com/Medvedolog/luci-app-telemt/releases/tag/3.5.14-rc2"><b>LuCI 3.5.14 RC2 — IPK/APK</b></a> · <a href="https://github.com/Medvedolog/luci-app-telemt/issues/29">Сообщить об испытаниях / Test report</a>.</p>
-</blockquote>
-
-<blockquote>
-<p><b>🧪 Telemt 3.5.14 RC1 — подписанный Pre-release / signed release candidate</b></p>
-<p>
-<strong>Русский.</strong> Опубликована тестовая версия <code>3.5.14-r1</code> для OpenWrt 24.10 (IPK) и 25.12 (APK).
-Пакеты подписаны, но <b>это не стабильный выпуск</b>. Автоматические испытания обновления UCI, запуска демона, генерации TOML и совместной работы Core + LuCI пройдены. Подключения Direct/ME/WEB на физических роутерах ещё требуют проверки.
-<br>
-<a href="https://github.com/Medvedolog/telemt_owrt/releases/tag/3.5.14-rc1"><b>Скачать ядро 3.5.14 RC1</b></a> ·
-<a href="https://github.com/Medvedolog/luci-app-telemt/releases/tag/3.5.14-rc1"><b>Скачать LuCI 3.5.14 RC1</b></a> ·
-<a href="https://github.com/Medvedolog/luci-app-telemt/issues/29">Отправить отчёт о тестировании</a>.
-<br>
-Перед обновлением сохраните <code>/etc/config/telemt</code>. Не публикуйте пользовательские секреты или полные конфигурации.
-</p>
-<p>
-<strong>English.</strong> Signed Telemt <code>3.5.14-r1</code> test packages for OpenWrt 24.10/IPK and 25.12/APK are now available as GitHub <b>Pre-releases, not Stable</b>.
-CI covers package installation, UCI upgrades, real runtime TOML/procd and paired Core + LuCI pages. Physical router acceptance and real Telegram Direct/ME/WEB connectivity are still pending.
-<br>
-<a href="https://github.com/Medvedolog/telemt_owrt/releases/tag/3.5.14-rc1">Core RC1 release</a> ·
-<a href="https://github.com/Medvedolog/luci-app-telemt/releases/tag/3.5.14-rc1">LuCI RC1 release</a> ·
-<a href="https://github.com/Medvedolog/luci-app-telemt/issues/29">Hardware test report</a>.
-Back up <code>/etc/config/telemt</code> and redact any secrets before reporting.
-</p>
-</blockquote>
-
-<blockquote>
-<p><b>Предыдущая тестовая версия 3.5.8 / Previous test build 3.5.8</b></p>
-<p>
-Релиз <b>3.5.8</b> (включая WEB Proxy) прошёл автоматическую проверку сборки и установки в эмуляции OpenWrt, но <b>на реальных роутерах ещё не тестировался</b>. WEB по умолчанию выключен; основной риск — упаковка и обновление поверх старой версии.
-Если у вас есть роутер, установите пакет и сообщите результат в <a href="https://github.com/Medvedolog/luci-app-telemt/issues/new?template=test-report.md">Issues репозитория luci-app-telemt («Test report»)</a>: модель, архитектура, версия OpenWrt, версии пакетов, WEB вкл/выкл, что сработало и что нет, вывод <code>logread | grep telemt</code>.
-</p>
-<p>
-Release <b>3.5.8</b> (including the WEB Proxy) has passed automated build and install checks on emulated OpenWrt, but <b>has not been tested on real routers yet</b>. WEB is off by default; the main risk is packaging and upgrading over an older version.
-If you have a router, please install the package and report the result via <a href="https://github.com/Medvedolog/luci-app-telemt/issues/new?template=test-report.md">Issues of the luci-app-telemt repository ("Test report")</a>: model, architecture, OpenWrt version, package versions, WEB on/off, what worked and what did not, and the output of <code>logread | grep telemt</code>.
-</p>
+<p><b>🧪 Актуальный тестовый выпуск / Latest test release: Telemt 3.5.14 RC3 (<code>3.5.14-r3</code>)</b></p>
+<p>Подписанные IPK (OpenWrt 24.10) и APK (OpenWrt 25.12): <a href="https://github.com/Medvedolog/telemt_owrt/releases/tag/3.5.14-rc3">Core</a> · <a href="https://github.com/Medvedolog/luci-app-telemt/releases/tag/3.5.14-rc3">LuCI</a>. Не Stable: на физических роутерах испытания продолжаются. Перед обновлением сохраните <code>/etc/config/telemt</code>. Просим проверить Direct/ME/WEB, WEB v2-ссылки и QR, работу <code>base_path</code>, WAN/DNS recovery и WEB lifecycle. <a href="https://github.com/Medvedolog/luci-app-telemt/issues/29">Отчёты тестеров</a>; логи — без секретов.</p>
+<p><small>Signed RC3 packages (not Stable). Back up UCI and report hardware tests with secrets redacted. Full release history and changes: <a href="https://github.com/Medvedolog/telemt_owrt/releases">Core Releases</a> · <a href="https://github.com/Medvedolog/luci-app-telemt/releases">LuCI Releases</a>.</small></p>
 </blockquote>
 
 <p align="center">
-  <a href="#whats-new">Что нового</a> •
   <a href="#overview">Обзор</a> •
   <a href="#whats-included">Что внутри</a> •
   <a href="#why-this-build-exists">Зачем нужна эта сборка</a> •
@@ -67,16 +21,6 @@ If you have a router, please install the package and report the result via <a hr
   <a href="#installation">Установка</a> •
   <a href="#notes">Примечания</a>
 </p>
-
-<hr/>
-
-<h2 id="whats-new">🆕 Что нового в 3.5.8</h2>
-
-<ul>
-  <li>Telemt <b>3.5.8</b>, пакеты <code>telemt-3.5.8-r2</code> для OpenWrt 25.12 (APK) и 24.10 (IPK): <code>aarch64_generic</code>, <code>aarch64_cortex-a53</code>, <code>x86_64</code></li>
-  <li>WEB Proxy (выключен по умолчанию), <code>[web.debug]</code> со sideband-диагностикой (опционально)</li>
-  <li>Сборка и подписанные релизы через <b>owfeed</b> (<a href="RELEASING.md">RELEASING.md</a>); подробности — в <a href="CHANGELOG.md">CHANGELOG.md</a></li>
-</ul>
 
 <hr/>
 
@@ -327,4 +271,4 @@ If you have a router, please install the package and report the result via <a hr
 ### 📋 English Summary
 **Headless Telemt for OpenWrt** is a highly optimized, headless packaging of the official Telegram MTProxy daemon (`telemt`) designed specifically for OpenWrt routers. Rather than forking the core binary, this project compiles the upstream Rust code for `aarch64-musl` with aggressive size optimizations (UPX, `opt-level=z`, `lto=true`) and pairs it with a completely rewritten `init.d` and UCI configuration layer. This custom integration solves real-world router issues like atomic config generation, safe hot-reloading, `procd` supervision, and memory constraints. The output includes ready-to-install IPK and APK packages. (Note: The LuCI WebUI is not included and must be installed as a separate module).
 
-**What's new in 3.5.8:** Telemt 3.5.8 packages (`telemt-3.5.8-r2`) for OpenWrt 25.12 (APK) and 24.10 (IPK) on `aarch64_generic`, `aarch64_cortex-a53` and `x86_64`; an optional WEB Proxy transport (off by default) with an opt-in `[web.debug]` sideband; signed releases built with owfeed. See [CHANGELOG.md](CHANGELOG.md) and [RELEASING.md](RELEASING.md). Install from the [Releases](https://github.com/Medvedolog/telemt_owrt/releases) page: `opkg install ./telemt_<version>-rN_<arch>.ipk` or `apk add --allow-untrusted ./telemt-<version>-rN_<arch>.apk`.
+**Current test packages:** Telemt `3.5.14-r3` (IPK for OpenWrt 24.10, APK for 25.12); see [Core RC3](https://github.com/Medvedolog/telemt_owrt/releases/tag/3.5.14-rc3) and [LuCI RC3](https://github.com/Medvedolog/luci-app-telemt/releases/tag/3.5.14-rc3). Historical release notes remain in [Releases](https://github.com/Medvedolog/telemt_owrt/releases) and [CHANGELOG.md](CHANGELOG.md).
