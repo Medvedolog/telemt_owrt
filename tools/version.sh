@@ -21,6 +21,7 @@ else
     # Build the RC2 PR artifact as r2, without changing stable/tag defaults.
     case "${GITHUB_HEAD_REF:-}" in
         feature/telemt-3.5.14-rc2-web-path) VERSION="${VERSION}-2" ;;
+        release/telemt-3.5.14-rc3) VERSION="${VERSION}-3" ;;
     esac
 fi
 VERSION="${VERSION#v}"
